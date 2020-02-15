@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <X11/X.h>
 #include <X11/Xlib.h>
