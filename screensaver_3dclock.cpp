@@ -158,6 +158,8 @@ creating_flame_thread(void*)
 	/* Flame updating */
 	while(_appExit == 0)
 	{
+		sleep_millisec(1);
+		
 		uCurrMillis = get_millisec();
 		if(FLAME_RATE_MILLIS >= (get_millisec() - uPrevMillis))
 			continue;
@@ -242,7 +244,6 @@ creating_flame_thread(void*)
 			}
 		}
 		
-		sleep_millisec(1);
 	}
 
 	ERR:
