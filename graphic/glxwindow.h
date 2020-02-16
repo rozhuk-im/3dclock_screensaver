@@ -194,21 +194,12 @@ int32_t cGLXWindow::
 create_window(uint32_t uWidth, uint32_t uHeight, const char *szWinCaption, 
 			  void(*callback_func)(sWindowState *ws, sXMouseCursPos *mousePos))
 {
-	GLint att[] = 
-	{   
-//		GLX_X_RENDERABLE    , True,
-		GLX_DRAWABLE_TYPE   , GLX_WINDOW_BIT,
-		GLX_RENDER_TYPE     , GLX_RGBA_BIT,
-		GLX_X_VISUAL_TYPE   , GLX_TRUE_COLOR,
-		GLX_RED_SIZE        , 8,
-		GLX_GREEN_SIZE      , 8,
-		GLX_BLUE_SIZE       , 8,
-		GLX_ALPHA_SIZE      , 8,
-		GLX_DEPTH_SIZE      , 24,
-		GLX_STENCIL_SIZE    , 8,
-		GLX_DOUBLEBUFFER    , True,
-		//GLX_SAMPLE_BUFFERS  , 1,
-		//GLX_SAMPLES         , 4,
+	GLint att[] = {
+		GLX_RGBA, 
+		GLX_DOUBLEBUFFER, 
+		GLX_DEPTH_SIZE,		24, 
+		GLX_SAMPLE_BUFFERS, 1,
+		GLX_SAMPLES,		4,
 		None
 	};
 	Window		rootWindow = 0;
