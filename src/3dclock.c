@@ -1,5 +1,6 @@
 /*
  *  Copyright (c) 2002 - 2020 Naezzhy Petr(Наезжий Пётр) <petn@mail.ru>
+ *  Copyright (c) 2020 Rozhuk Ivan <rozhuk.im@gmail.com>
  *  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +32,7 @@
  */
 
 
+#include <sys/param.h>
 #include <sys/types.h>
 #include <stdint.h>
 #include <errno.h>
@@ -44,21 +46,9 @@
 
 #include "glxwindow.h"
 
-
-struct rgb {
-	uint8_t r;
-	uint8_t g;
-	uint8_t b;
-};
-
-struct sSymbol {
-	uint32_t width;
-	uint32_t height;
-	uint32_t top;
-	int32_t left;
-	GLuint texture;
-};
-
+#ifndef __unused
+#	define __unused		__attribute__((__unused__))
+#endif
 
 #define NUM_OF_DIGIT		10
 #define FONT_HEIGHT		256
@@ -75,9 +65,28 @@ struct sSymbol {
 #define FONT_NAME		"./fonts/Roboto-Bold.ttf"
 
 
-static sSymbol _symbol[NUM_OF_DIGIT];
-static rgb _scr_buf[FLAME_WIDTH][FLAME_HEIGHT];
-static volatile int _appExit = 0;
+typedef struct rgb_s {
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+} rgb_t, *rgb_p;
+
+typedef struct digit_descriptor_s {
+	uint32_t width;
+	uint32_t height;
+	uint32_t top;
+	int32_t left;
+	GLuint texture;
+} digit_desc_t, *digit_desc_p;
+
+
+typedef struct clock_3d_s {
+	volatile int	running;
+	rgb_t		flame_buf[FLAME_WIDTH][FLAME_HEIGHT];
+	digit_desc_t	digit_desc[10];
+	glx_wnd_t	glx_wnd;
+} clock_3d_t, *clock_3d_p;
+
 
 
 static inline uint64_t	
@@ -98,16 +107,16 @@ sleep_millisec(uint32_t uiMillisec) {
 	nanosleep(&ts, NULL);
 }
 
-static inline int32_t
+static inline uint32_t
 randval(uint32_t max_val) {
 	return (arc4random() % (max_val + 1));
 }
 
 static void
-flame_update(void) {
+flame_update(clock_3d_p clock_3d) {
 	size_t i, j;
 	uint8_t tmp, color, pal_buf[FLAME_WIDTH][FLAME_HEIGHT];
-	static rgb palit[256];
+	static rgb_t palit[256];
 	static int palit_init_done = 0;
 
 	/* Filling flame palit. */
@@ -135,7 +144,7 @@ flame_update(void) {
 		}
 	}
 
-#if 1
+#if 0
 	/* One pass flame gen method. */
 	for (i = 1; i < (FLAME_WIDTH - 1); i ++) {
 		for (j = 1; j < (FLAME_HEIGHT - 1); j ++) {
@@ -149,16 +158,17 @@ flame_update(void) {
 			} else {
 				tmp = 0;
 			}
-			pal_buf[i][j]=tmp;
+			pal_buf[i][j] = tmp;
+			clock_3d->flame_buf[i][j] = palit[tmp];
 		}
 	}
 #else
 	/* Two pass flame gen method. */
 	for (i = 1; i < (FLAME_WIDTH - 1); i ++) {
 		for (j = 1; j < (FLAME_HEIGHT - 1); j ++) {
-			tmp = (pal_buf[i - 1][j - 1] +
+			tmp = (uint8_t)((pal_buf[i - 1][j - 1] +
 			    pal_buf[i][j - 1] +
-			    pal_buf[i + 1][j - 1]) / 2.97f;
+			    pal_buf[i + 1][j - 1]) / 2.97f);
 			if (tmp > 1) {
 				tmp --;
 			} else {
@@ -168,38 +178,36 @@ flame_update(void) {
 		}
 	}
 	for (i = (FLAME_WIDTH - 2); i > 1; i --) {
-		for(j = 1; j < (FLAME_HEIGHT - 1); j ++) {
-			tmp = (pal_buf[i - 1][j - 1] +
+		for (j = 1; j < (FLAME_HEIGHT - 1); j ++) {
+			tmp = (uint8_t)((pal_buf[i - 1][j - 1] +
 			    pal_buf[i][j - 1] +
-			    pal_buf[i + 1][j - 1]) / 2.97f;
+			    pal_buf[i + 1][j - 1]) / 2.97f);
 			if (tmp > 1) {
 				tmp --;
 			} else {
 				tmp = 0;
 			}
 			pal_buf[i][j] = tmp;
+			clock_3d->flame_buf[i][j] = palit[tmp];
 		}
 	}
 #endif
-
-	for (i = 0; i < FLAME_WIDTH; i ++) {
-		for (j = 0; j < FLAME_HEIGHT; j ++) {
-			_scr_buf[i][j] = palit[pal_buf[i][j]];
-		}
-	}
+	//for (i = 0; i < (FLAME_WIDTH * FLAME_HEIGHT); i ++) {
+	//	clock_3d->flame_buf[0][i] = palit[pal_buf[0][i]];
+	//}
 }
 
 
 /* Generates digits textures from tt fonts */
 static int32_t	
-create_digits_tex_array(void) {
+create_digits_tex_array(clock_3d_p clock_3d) {
 	FT_Library lib;
 	FT_Face font;
 	FT_GlyphSlot gliph;
 	uint8_t *bitmap;
 	size_t i, x, y;
-	
-	memset(_symbol, 0x00, sizeof(_symbol));
+
+	memset(&clock_3d->digit_desc, 0x00, sizeof(clock_3d->digit_desc));
 
 	if (0 != FT_Init_FreeType(&lib)) {
 		fprintf(stderr, "FT_Init_FreeType: Error init freetype library\n\r");
@@ -223,13 +231,13 @@ create_digits_tex_array(void) {
 			fprintf(stderr, "FT_Load_Char: Error load char\n");
 		}
 
-		_symbol[i].width = gliph->bitmap.width;
-		_symbol[i].height = gliph->bitmap.rows;
-		_symbol[i].top = gliph->bitmap_top;
-		_symbol[i].left = gliph->bitmap_left;
+		clock_3d->digit_desc[i].width = gliph->bitmap.width;
+		clock_3d->digit_desc[i].height = gliph->bitmap.rows;
+		clock_3d->digit_desc[i].top = (uint32_t)gliph->bitmap_top;
+		clock_3d->digit_desc[i].left = gliph->bitmap_left;
 
 		/* Two bytes for each pixel. */
-		size_t uiBitmapSize = 2 * _symbol[i].width * _symbol[i].height;	
+		size_t uiBitmapSize = 2 * clock_3d->digit_desc[i].width * clock_3d->digit_desc[i].height;	
 		bitmap = (uint8_t*)malloc(uiBitmapSize);
 		if (bitmap == NULL) {
 			fprintf(stderr, "malloc: Error memory allocating fot bimap\n");
@@ -238,28 +246,30 @@ create_digits_tex_array(void) {
 		memset(bitmap, 0xff, uiBitmapSize);
 
 		/* Filling bitmap grey&alpha bytes. */
-		for (y = 0; y < _symbol[i].height; y ++) {
-			for (x = 0; x<_symbol[i].width; x++) {
-				bitmap[2 * (x + y * gliph->bitmap.width) + 1] = 0.97f * gliph->bitmap.buffer[x + y * gliph->bitmap.width];
+		for (y = 0; y < clock_3d->digit_desc[i].height; y ++) {
+			for (x = 0; x<clock_3d->digit_desc[i].width; x++) {
+				bitmap[2 * (x + y * gliph->bitmap.width) + 1] =
+				    (uint8_t)(0.97f * gliph->bitmap.buffer[x + y * gliph->bitmap.width]);
 			}
 
 		}
 	
 		/* Creating symbol texture. */
-		glGenTextures(1, &_symbol[i].texture);
-		if (0 == _symbol[i].texture) {
+		glGenTextures(1, &clock_3d->digit_desc[i].texture);
+		if (0 == clock_3d->digit_desc[i].texture) {
 			fprintf(stderr, "glGenTextures: Error generate texture indentifier (GL not init?)\n");
 			return 0;
 		}
 
 		glEnable(GL_TEXTURE_RECTANGLE);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-		glBindTexture(GL_TEXTURE_RECTANGLE, _symbol[i].texture);
+		glBindTexture(GL_TEXTURE_RECTANGLE, clock_3d->digit_desc[i].texture);
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
 		glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_RGBA, 
-		    _symbol[i].width, _symbol[i].height, 0,
+		    (GLsizei)clock_3d->digit_desc[i].width,
+		    (GLsizei)clock_3d->digit_desc[i].height, 0,
 		    GL_LUMINANCE_ALPHA,	GL_UNSIGNED_BYTE, bitmap);
 
 		free(bitmap);
@@ -272,20 +282,20 @@ create_digits_tex_array(void) {
 }
 
 static void
-destroy_digits_tex_array(void)
+destroy_digits_tex_array(clock_3d_p clock_3d)
 {
 	for (uint32_t i = 0; i < NUM_OF_DIGIT; i ++)
 	{
-		glDeleteTextures(1, &_symbol[i].texture);
+		glDeleteTextures(1, &clock_3d->digit_desc[i].texture);
 	}
 
-	memset(_symbol, 0x00, sizeof(_symbol));
+	memset(&clock_3d->digit_desc, 0x00, sizeof(clock_3d->digit_desc));
 }
 
 
 /* Draw didx textured quads */
 static void
-draw_gliph_quads(const int time_val) {
+draw_gliph_quads(clock_3d_p clock_3d, const int time_val) {
 	size_t i, didx;
 	uint8_t time_digits[2];
 
@@ -294,8 +304,8 @@ draw_gliph_quads(const int time_val) {
 	time_digits[0] = (uint8_t)(time_val / 10);
 	time_digits[1] = (uint8_t)(time_val % 10);
 
-	int32_t	x = (BITMAP_WIDTH - 2 * _symbol[0].width - _symbol[0].left) * 0.45;
-	int32_t	y = (BITMAP_HEIGHT-FONT_HEIGHT) / 2;
+	int32_t	x = (BITMAP_WIDTH - 2 * clock_3d->digit_desc[0].width - clock_3d->digit_desc[0].left) * 0.45f;
+	int32_t	y = (BITMAP_HEIGHT - FONT_HEIGHT) / 2;
 
 	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
 	glDisable(GL_LIGHTING);
@@ -311,34 +321,35 @@ draw_gliph_quads(const int time_val) {
 
 	for (i = 0; i < 2; i ++) {
 		didx = time_digits[i];
-		glBindTexture(GL_TEXTURE_RECTANGLE, _symbol[didx].texture);
+		glBindTexture(GL_TEXTURE_RECTANGLE, clock_3d->digit_desc[didx].texture);
 
-		x += (_symbol[didx].left + 1);
-		y = (y - (_symbol[didx].height - _symbol[didx].top));
+		x += (clock_3d->digit_desc[didx].left + 1);
+		y -= (clock_3d->digit_desc[didx].height - clock_3d->digit_desc[didx].top);
 
 		glBegin(GL_QUADS);
 		{
-			glTexCoord2f((_symbol[didx].width - 1), 0.0f);
-			glVertex3f((x + _symbol[didx].width), (y + _symbol[didx].height), 0.5f);
+			glTexCoord2f((clock_3d->digit_desc[didx].width - 1), 0.0f);
+			glVertex3f((x + clock_3d->digit_desc[didx].width), (y + clock_3d->digit_desc[didx].height), 0.5f);
 
 			glTexCoord2f(0.0f, 0.0f);
-			glVertex3f(x, (y + _symbol[didx].height), 0.5f);
+			glVertex3f(x, (y + clock_3d->digit_desc[didx].height), 0.5f);
 
-			glTexCoord2f(0.0f, (_symbol[didx].height - 1));
+			glTexCoord2f(0.0f, (clock_3d->digit_desc[didx].height - 1));
 			glVertex3f(x, y, 0.5f);
 
-			glTexCoord2f((_symbol[didx].width - 1), (_symbol[didx].height - 1));
-			glVertex3f((x + _symbol[didx].width), y, 0.5f);
+			glTexCoord2f((clock_3d->digit_desc[didx].width - 1), (clock_3d->digit_desc[didx].height - 1));
+			glVertex3f((x + clock_3d->digit_desc[didx].width), y, 0.5f);
 		}
 		glEnd();
 
-		x += _symbol[didx].width;
+		x += clock_3d->digit_desc[didx].width;
 	}
 }
 
 
 static void
-draw_time_edge_texture(const int time_val, const GLuint tex_id) {
+draw_time_edge_texture(clock_3d_p clock_3d, const int time_val,
+    const GLuint tex_id) {
 	const float border_width = 20.0f;
 	const float line_width = 3.0f;
 	const float cathet = 90.0f;
@@ -482,7 +493,7 @@ draw_time_edge_texture(const int time_val, const GLuint tex_id) {
 
 	glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
 
-	draw_gliph_quads(time_val);
+	draw_gliph_quads(clock_3d, time_val);
 
 	glEnable(GL_TEXTURE_RECTANGLE);
 	glBindTexture(GL_TEXTURE_RECTANGLE, tex_id);
@@ -492,10 +503,12 @@ draw_time_edge_texture(const int time_val, const GLuint tex_id) {
 
 /* Redraw window callback */
 static void
-redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos) {
+redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
+    const wnd_state_p ws, const mcur_pos_p mcur_pos, void *udata) {
+	clock_3d_p clock_3d = udata;
 	size_t i;
 	time_t rawtime;
-	tm tminfo;
+	struct tm tminfo;
 	float fDelta;
 	const float light0Diffuse[] = { 1.0f, 1.0f, 1.0f };
 	const float light0Ambient[] = { 0.3f, 0.3f, 0.3f };
@@ -505,20 +518,18 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 	const uint64_t cur_time_ms = get_millisec();
 
 	static float dY[] = { 0.2f, 0.2f, 0.2f };
-	static uint32_t	uHour = IMPOSSIBLE_VAL;
-	static uint32_t	uMin = IMPOSSIBLE_VAL;
-	static uint32_t	uSec = IMPOSSIBLE_VAL;
+	static int uSec = -1, uMin = -1, uHour = -1;
 	static int32_t iStartMousePosX = IMPOSSIBLE_VAL;
 	static int32_t iStartMousePosY = IMPOSSIBLE_VAL;
 	static GLuint tex_second, tex_minute, tex_hour, tex_flame;
-	static uint64_t prev_time_ms = get_millisec();
+	static uint64_t prev_time_ms = 0;
 	static GLUquadricObj *quadrObj = NULL;
 
-	float static fAngleX[3];
-	float static fAngleY[3];
+	static float fAngleX[3];
+	static float fAngleY[3];
 
 	/************************ GL initializing *********************/
-	if (ws->initFlag) {
+	if (0 != (GLX_WND_REDRAW_F_INIT & flags)) {
 		glEnable(GL_POLYGON_SMOOTH);
 		glShadeModel(GL_SMOOTH);
 		glEnable(GL_NORMALIZE);
@@ -541,7 +552,7 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 		}
 
 		/* Generating textures */
-		create_digits_tex_array();
+		create_digits_tex_array(clock_3d);
 
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 
@@ -557,20 +568,20 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 	}
 
 	/************************** Closing window ********************/
-	if (ws->destroyFlag) {
-		destroy_digits_tex_array();
+	if (0 != (GLX_WND_REDRAW_F_DESTROY & flags)) {
+		destroy_digits_tex_array(clock_3d);
 	}
 
 	/* Checking mouse cursor position and stop program if it changes. */
-	if (mousePos->iRootX > 0 &&
-	    mousePos->iRootY > 0 &&
+	if (mcur_pos->root_x > 0 &&
+	    mcur_pos->root_y > 0 &&
 	    iStartMousePosX == IMPOSSIBLE_VAL &&
 	    iStartMousePosY == IMPOSSIBLE_VAL) {
-		iStartMousePosX = mousePos->iRootX;
-		iStartMousePosY = mousePos->iRootY;
+		iStartMousePosX = mcur_pos->root_x;
+		iStartMousePosY = mcur_pos->root_y;
 	} else if ((iStartMousePosX != IMPOSSIBLE_VAL || iStartMousePosY != IMPOSSIBLE_VAL) &&
-	    ((iStartMousePosX != mousePos->iRootX) || (iStartMousePosY != mousePos->iRootY))) {
-		_appExit = 1;
+	    ((iStartMousePosX != mcur_pos->root_x) || (iStartMousePosY != mcur_pos->root_y))) {
+		clock_3d->running = 0;
 	}
 
 	/************************* Render to texture ******************/
@@ -585,23 +596,23 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 	/* Create framing digits on edges textures */
 	if (uSec != tminfo.tm_sec) {
 		uSec = tminfo.tm_sec; 
-		draw_time_edge_texture(tminfo.tm_sec, tex_second);
+		draw_time_edge_texture(clock_3d, tminfo.tm_sec, tex_second);
 		if (uMin != tminfo.tm_min) {
 			uMin = tminfo.tm_min; 
-			draw_time_edge_texture(tminfo.tm_min, tex_minute);
+			draw_time_edge_texture(clock_3d, tminfo.tm_min, tex_minute);
 			if (uHour != tminfo.tm_hour) {
 				uHour = tminfo.tm_hour; 
-				draw_time_edge_texture(tminfo.tm_hour, tex_hour);
+				draw_time_edge_texture(clock_3d, tminfo.tm_hour, tex_hour);
 			}
 		}
 	}
 
 	/* Flame updating. */
-	flame_update();
+	flame_update(clock_3d);
 
 	/*********************** Render to screen *********************/
 	/* Rotations calculation */
-	fDelta = CUBE_ROTATION_SPEED * float(cur_time_ms - prev_time_ms);
+	fDelta = CUBE_ROTATION_SPEED * (float)(cur_time_ms - prev_time_ms);
 	prev_time_ms = cur_time_ms;
 	
 	for (i = 0; i < 3; i ++) {
@@ -618,16 +629,16 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(50, (double)fX, 0.5, 500);
+	gluPerspective(50.0, (double)fX, 0.5, 500.0);
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
-	gluLookAt(0, 0, 6, 0, 0, 0, 0, 1, 0);
+	gluLookAt(0.0, 0.0, 6.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
 	glDepthFunc(GL_LEQUAL);
 	glHint(GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST);
 	
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	glViewport(0, 0, ws->width, ws->height);
+	glViewport(0, 0, (GLsizei)ws->width, (GLsizei)ws->height);
 
 	glLoadIdentity();
 
@@ -643,10 +654,10 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 	/* Drawing flame quad */
 	glBindTexture(GL_TEXTURE_RECTANGLE, tex_flame);
 	glTexImage2D(GL_TEXTURE_RECTANGLE, 0, 3, FLAME_WIDTH, FLAME_HEIGHT, 
-	    0, GL_RGB, GL_UNSIGNED_BYTE, _scr_buf);	
+	    0, GL_RGB, GL_UNSIGNED_BYTE, clock_3d->flame_buf);	
 	glDisable(GL_LIGHTING);
 	
-	glColor4f(1.0,1.0,1.0,0.9f);
+	glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
     glPushMatrix();
 		glTranslatef(0.0f, 0.0f, -10.0f);
 		glBegin(GL_QUADS);
@@ -973,31 +984,41 @@ redraw_window(cGLXWindow::sWindowState *ws, cGLXWindow::sXMouseCursPos *mousePos
 }
 
 static void
-events_update(XEvent *event) {
+events_update(glx_wnd_p glx_wnd __unused, const XEvent *event,
+    void *udata) {
+	clock_3d_p clock_3d = udata;
 
 	switch (event->type) {
 	case ButtonPress:
 	case KeyPress:
-		_appExit = 1;
+		clock_3d->running = 0;
 		break;
 	}
 }
 
+
 int
-main(int argc, char **argv) {
-	cGLXWindow window;
+main(int argc __unused, char **argv __unused) {
+	int error;
+	clock_3d_t clock_3d;
 
-	window.create_window(0, 0, "3dclock", redraw_window);
-	window.init_events_callback(events_update);
-	//window.hide_cursor();
-	window.set_window_fullscreen_popup();
+	memset(&clock_3d, 0x00, sizeof(clock_3d));
+	clock_3d.running ++;
 
-	while (0 < window.update_window() && _appExit == 0) {
+	error = glx_wnd_create(0, 0, "3dclock", redraw_window,
+	    events_update, &clock_3d, &clock_3d.glx_wnd);
+	if (0 != error)
+		return (error);
+	//glx_wnd_hide_cursor(&clock_3d.glx_wnd);
+	glx_wnd_set_window_fullscreen_popup(&clock_3d.glx_wnd);
+
+	while (0 == glx_wnd_update_window(&clock_3d.glx_wnd) &&
+	    0 != clock_3d.running) {
 		sleep_millisec(1);
 	}
-	
-	window.destroy_window();
-	window.show_cursor();
 
-	return 0;
+	glx_wnd_show_cursor(&clock_3d.glx_wnd);
+	glx_wnd_destroy(&clock_3d.glx_wnd);
+
+	return (0);
 }

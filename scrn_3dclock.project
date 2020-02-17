@@ -3,7 +3,7 @@
   <Description/>
   <Dependencies/>
   <VirtualDirectory Name="src">
-    <File Name="src/3dclock.cpp"/>
+    <File Name="src/3dclock.c"/>
     <File Name="src/glxwindow.h"/>
   </VirtualDirectory>
   <Settings Type="Executable">
@@ -25,7 +25,7 @@
       <ResourceCompiler Options=""/>
     </GlobalSettings>
     <Configuration Name="Debug" CompilerType="clang" DebuggerType="GNU gdb debugger" Type="Executable" BuildCmpWithGlobalSettings="append" BuildLnkWithGlobalSettings="append" BuildResWithGlobalSettings="append">
-      <Compiler Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" C_Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-Wall" Assembler="" Required="yes" PreCompiledHeader="" PCHInCommandLine="no" PCHFlags="" PCHFlagsPolicy="0"/>
+      <Compiler Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" C_Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" Assembler="" Required="yes" PreCompiledHeader="" PCHInCommandLine="no" PCHFlags="" PCHFlagsPolicy="0"/>
       <Linker Options="" Required="yes"/>
       <ResourceCompiler Options="" Required="no"/>
       <General OutputFile="$(IntermediateDirectory)/$(ProjectName)" IntermediateDirectory="$(ConfigurationName)" Command="$(OutputFile)" CommandArguments="" UseSeparateDebugArgs="no" DebugArguments="" WorkingDirectory="" PauseExecWhenProcTerminates="yes" IsGUIProgram="no" IsEnabled="yes"/>

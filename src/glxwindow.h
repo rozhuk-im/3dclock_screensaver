@@ -1,5 +1,6 @@
 /*
  *  Copyright (c) 2013 - 2018 Naezzhy Petr(Наезжий Пётр) <petn@mail.ru>
+ *  Copyright (c) 2020 Rozhuk Ivan <rozhuk.im@gmail.com>
  *  All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -34,12 +35,11 @@
 #define GLXWINDOW_H
 
 
-#include <stdint.h>
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <stdint.h>
 #include <errno.h>
-#include <stdio.h>
-#include <string.h>
 
 #include <X11/X.h>
 #include <X11/Xlib.h>
@@ -51,552 +51,449 @@
 #include <GL/glext.h>
 
 
-class cGLXWindow {
-public:
-	struct sXMouseCursPos {
-		int32_t iRootX;
-		int32_t iRootY;
-		int32_t iWinX;
-		int32_t iWinY;
-	};
+typedef struct window_state_s {
+	uint32_t	width;
+	uint32_t	height;
+} wnd_state_t, *wnd_state_p;
 
-	struct sWindowState {
-		uint32_t width;
-		uint32_t height;
-		uint8_t initFlag;
-		uint8_t resizeFlag;
-		uint8_t destroyFlag;
-	};
-
-			cGLXWindow();
-	virtual		~cGLXWindow();
-	int32_t		create_window(uint32_t width, uint32_t height,
-			const char *szWinCaption, void (*)(sWindowState*, sXMouseCursPos*));
-	int32_t		update_window(void);
-	void		destroy_window();
-	int32_t		set_window_size(uint32_t width, uint32_t height);
-	int32_t		set_window_fullscreen_popup();
-	int32_t		unset_window_fullscreen_popup(uint32_t width, uint32_t height);
-	void		hide_cursor(void);
-	void		show_cursor(void);
-	Window		get_window_XID(void);
-	Display *	get_window_display();
-	int32_t		init_events_callback(void (*)(XEvent* event));
-
-private:
-	int32_t		get_screen_resolution(uint32_t *puWidth, uint32_t *puHeight);
-	int32_t		set_fullscreen(void);
-
-	/* Callback for class returns width, height, init and resize flag */
-	void	(*redraw_callback)(sWindowState *ws, sXMouseCursPos *mousePos);
-	void	(*events_callback)(XEvent* event);
-
-	Display *display;
-	Window window;
-	XEvent event;
-	int screen;
-
-	XVisualInfo *vi;
-	Colormap cmap;
-	XSetWindowAttributes swa;
-	GLXContext glc;
-	XWindowAttributes gwa;
-	Atom wmDelete;
-
-	sWindowState ws;
-
-	/* For mouse pointer */
-	sXMouseCursPos mousePos;
-	Window returnedWindow;
-	uint32_t uMask;
-};
+typedef struct x_mouse_curs_pos_s {
+	int32_t		root_x;
+	int32_t		root_y;
+	int32_t		win_x;
+	int32_t		win_y;
+} mcur_pos_t, *mcur_pos_p;
 
 
-cGLXWindow::cGLXWindow() {
+#define GLX_WND_REDRAW_F_INIT		(((uint32_t)1) << 0)
+#define GLX_WND_REDRAW_F_DESTROY	(((uint32_t)1) << 1)
+#define GLX_WND_REDRAW_F_RESIZE		(((uint32_t)1) << 2)
 
-	display = NULL;
-	window = 0;
-	cmap = 0;
-	vi = NULL;
-	glc = NULL;
-	wmDelete = 0;
-	
-	memset(&ws, 0x00, sizeof(ws));
-	
-	redraw_callback = NULL;
-	events_callback = NULL;
+typedef struct gl_x_window_s *glx_wnd_p;
+typedef void (*glx_wnd_redraw_cb)(glx_wnd_p glx_wnd, const uint32_t flags,
+    const wnd_state_p ws, const mcur_pos_p mcur_pos, void *udata);
+typedef void (*glx_wnd_events_cb)(glx_wnd_p glx_wnd, const XEvent *event,
+    void *udata);
+
+
+typedef struct gl_x_window_s {
+	glx_wnd_redraw_cb	redraw_cb;
+	glx_wnd_events_cb	events_cb;
+	void			*udata;
+
+	Display			*display;
+	Window			window;
+	int			screen;
+
+	XVisualInfo		*vi;
+	Colormap		cmap;
+	XSetWindowAttributes	swa;
+	GLXContext		glc;
+	XWindowAttributes	gwa;
+	Atom			wm_delete;
+
+	wnd_state_t		ws;
+	mcur_pos_t		mcur_pos;
+} glx_wnd_t;
+
+
+
+static inline int
+get_screen_resolution(uint32_t *width, uint32_t *height) {
+	Display	*display = NULL;
+	Screen	*screen = NULL;
+
+	if (width == NULL && height == NULL)
+		return (EINVAL);
+
+	display = XOpenDisplay(NULL);
+	if (NULL == display)
+		return (-1);
+	screen = DefaultScreenOfDisplay(display);
+	if (NULL == screen) {
+		XCloseDisplay(display);
+		return (-1);
+	}
+	if (NULL != height) {
+		(*height) = (uint32_t)screen->height;
+	}
+	if (NULL != width) {
+		(*width) = (uint32_t)screen->width;
+	}
+	XCloseDisplay(display);
+	return (0);
 }
 
 
-cGLXWindow::~cGLXWindow() {
-	destroy_window();
-}
+static inline void
+glx_wnd_destroy(glx_wnd_p glx_wnd) {
 
+	if (NULL == glx_wnd)
+		return;
 
-int32_t 
-cGLXWindow::init_events_callback(void(*callback_func)(XEvent *event))
-{
-	events_callback = (void(*)(XEvent*))callback_func;
-	return 1;
-}
-
-/*
- * Deinitialize window
- */
-void
-cGLXWindow::destroy_window() {
-
-	if (glc) {
-		ws.initFlag = 0;
-		ws.resizeFlag = 0;
-		ws.destroyFlag = 1;
-		redraw_callback(&ws, &mousePos);
-
-		if (!glXMakeCurrent(display, None, NULL)) {
+	if (glx_wnd->glc) {
+		glx_wnd->redraw_cb(glx_wnd,
+		    GLX_WND_REDRAW_F_DESTROY, &glx_wnd->ws,
+		    &glx_wnd->mcur_pos, glx_wnd->udata);
+		if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
 			fprintf(stderr, "Could not release drawing context\n\r");
 		}
-
-		glXDestroyContext(display, glc);
-		glc = NULL;
+		glXDestroyContext(glx_wnd->display, glx_wnd->glc);
 	}
 
-	if (display != NULL && window != 0) {
-		XDestroyWindow(display, window);
-		XCloseDisplay(display);
-		display = NULL;
-		window = 0;
+	if (0 != glx_wnd->window) {
+		XDestroyWindow(glx_wnd->display, glx_wnd->window);
+		XCloseDisplay(glx_wnd->display);
 	}
+	if (0 != glx_wnd->swa.colormap) {
+		XFreeColormap(glx_wnd->display, glx_wnd->swa.colormap); 
+	}
+	if (NULL != glx_wnd->display) {
+		XCloseDisplay(glx_wnd->display);
+	}
+	memset(glx_wnd, 0x00, sizeof(glx_wnd_t));
 }
 
-/*
- *  Create window with width and height dimentions
- *  If width and height equal zero then window
- *  dimentions sets to fullscreen
- *  Returns 1 on success or -1 on fail
- */
-int32_t
-cGLXWindow::create_window(uint32_t width, uint32_t height, const char *szWinCaption, 
-    void(*callback_func)(sWindowState *ws, sXMouseCursPos *mousePos)) {
+static inline int
+glx_wnd_create(uint32_t width, uint32_t height, const char *caption, 
+    glx_wnd_redraw_cb redraw_cb, glx_wnd_events_cb events_cb, void *udata,
+    glx_wnd_p glx_wnd) {
+	int error;
 	Window rootWindow = 0;
 	GLint att[] = {
 		GLX_RGBA,
 		GLX_DOUBLEBUFFER,
-		GLX_RED_SIZE		, 1,
-		GLX_GREEN_SIZE		, 1,
-		GLX_BLUE_SIZE		, 1,
-		GLX_ALPHA_SIZE		, 1,
-		GLX_DEPTH_SIZE		, 1,
-		GLX_SAMPLE_BUFFERS	, 1,
-		GLX_SAMPLES		, 4,
+		GLX_RED_SIZE, 1,
+		GLX_GREEN_SIZE, 1,
+		GLX_BLUE_SIZE, 1,
+		GLX_ALPHA_SIZE, 1,
+		GLX_DEPTH_SIZE, 1,
+		GLX_SAMPLE_BUFFERS, 1,
+		GLX_SAMPLES, 4,
 		None
 	};
 
-	if (callback_func == NULL)
-	{
-		fprintf(stderr, "Invalid callback function\r\n");
-		return -1;
+	if (((0 == width || 0 == height) && width != height) ||
+	    NULL == redraw_cb || NULL == events_cb || NULL == glx_wnd)
+		return (EINVAL);
+
+	if (0 == width && 0 == height) {
+		error = get_screen_resolution(&width, &height);
+		if (0 != error)
+			return (error);
+	}
+	memset(glx_wnd, 0x00, sizeof(glx_wnd_t));
+	glx_wnd->ws.width = width;
+	glx_wnd->ws.height = height;
+	glx_wnd->redraw_cb = redraw_cb;
+	glx_wnd->events_cb = events_cb;
+	glx_wnd->udata = udata;
+
+	glx_wnd->display = XOpenDisplay(NULL);
+	if (NULL == glx_wnd->display) {
+		fprintf(stderr, "Cannot open display\n");
+		return (-1);
+	}
+	rootWindow = DefaultRootWindow(glx_wnd->display);
+	if (0 == rootWindow) {
+		fprintf(stderr, "Cannot get root window XID\n");
+		goto err_out;
+	}
+	glx_wnd->screen = DefaultScreen(glx_wnd->display);
+
+	glx_wnd->vi = glXChooseVisual(glx_wnd->display, glx_wnd->screen,
+	    att);
+	if (NULL == glx_wnd->vi) {
+		fprintf(stderr, "No appropriate visual found\n");
+		goto err_out;
 	}
 
-	redraw_callback = (void (*)(sWindowState*, sXMouseCursPos*))callback_func;
-
-	if(width == 0 && height == 0) {
-		if (1 > get_screen_resolution(&width, &height)) {
-			fprintf(stderr, "Could not get screen resolution\r\n");
-			return -1;
-		}
-	} else if (width == 0 || height == 0) {
-		fprintf(stderr, "Invalid screen dimentions\r\n");
-		return -1;
+	glx_wnd->swa.colormap = XCreateColormap(glx_wnd->display,
+	    rootWindow, glx_wnd->vi->visual, AllocNone);
+	if (0 == glx_wnd->swa.colormap) {
+		fprintf(stderr, "Cannot create colormap\n");
+		goto err_out;
 	}
+	glx_wnd->swa.event_mask = (ExposureMask | KeyPressMask |
+	    StructureNotifyMask | ButtonPressMask);
 
-	if (display != NULL || window != 0) {
-		XDestroyWindow(display, window);
-		XCloseDisplay(display);
-		display = NULL;
-		window = 0;
-	}
-
-	ws.width = width;
-	ws.height = height;
-
-/****************************** Begin init ****************************/
-	display = XOpenDisplay(NULL);
-	if (display == NULL) {
-		fprintf(stderr, "Cannot open display\r\n");
-		return -1;
-	}
-
-	screen = DefaultScreen(display);
-
-	rootWindow = DefaultRootWindow(display);
-	if (rootWindow == 0) {
-		fprintf(stderr, "Cannot get root window XID\r\n");
-		goto ERRORS;
-	}
-
-	vi = glXChooseVisual(display, screen, att);
-	if (vi == NULL)	{
-		fprintf(stderr, "No appropriate visual found\r\n");
-		goto ERRORS;
-	}
-
-	cmap = XCreateColormap(display, rootWindow, vi->visual, AllocNone);
-	if (cmap == 0) {
-		fprintf(stderr, "Cannot create colormap\r\n");
-		goto ERRORS;
-	}
-
-	swa.colormap = cmap;
-	swa.event_mask = (ExposureMask | KeyPressMask | StructureNotifyMask | ButtonPressMask);
-
-	window = XCreateWindow(
-		display,
-		rootWindow,
-		0,
-		0,
-		width,
-		height,
-		0,
-		vi->depth,
-		InputOutput,
-		vi->visual,
-		(CWColormap | CWEventMask | CWColormap),
-		&swa);
-
-	if (window == 0) {
-		fprintf(stderr, "Cannot create window\r\n");
-		goto ERRORS;
+	glx_wnd->window = XCreateWindow(
+	    glx_wnd->display,
+	    rootWindow,
+	    0,
+	    0,
+	    width,
+	    height,
+	    0,
+	    glx_wnd->vi->depth,
+	    InputOutput,
+	    glx_wnd->vi->visual,
+	    (CWColormap | CWEventMask | CWColormap),
+	    &glx_wnd->swa);
+	if (0 == glx_wnd->window) {
+		fprintf(stderr, "Cannot create window\n");
+		goto err_out;
 	}
 
 #if 0
-	XSetStandardProperties(display, window, szWinCaption,
-	    szWinCaption, None, NULL, 0, NULL);
-	XMapRaised(display, window);
+	XSetStandardProperties(glx_wnd->display, glx_wnd->window, caption,
+	    caption, None, NULL, 0, NULL);
+	XMapRaised(glx_wnd->display, glx_wnd->window);
 #endif
 
-	wmDelete = XInternAtom(display, "WM_DELETE_WINDOW", True);
-	XSetWMProtocols(display, window, &wmDelete, 1);
+	glx_wnd->wm_delete = XInternAtom(glx_wnd->display,
+	    "WM_DELETE_WINDOW", True);
+	XSetWMProtocols(glx_wnd->display, glx_wnd->window,
+	    &glx_wnd->wm_delete, 1);
 
-	if (szWinCaption != NULL) {
-		XStoreName(display, window, szWinCaption);
+	if (caption != NULL) {
+		XStoreName(glx_wnd->display, glx_wnd->window, caption);
 	}
 
-	XMapWindow(display, window);
+	XMapWindow(glx_wnd->display, glx_wnd->window);
 
-	glc = glXCreateContext(display, vi, NULL, GL_TRUE);
-	if (glc == NULL) {
-		fprintf(stderr, "Cannot create OpenGL context\r\n");
-		goto ERRORS;
+	glx_wnd->glc = glXCreateContext(glx_wnd->display, glx_wnd->vi,
+	    NULL, GL_TRUE);
+	if (glx_wnd->glc == NULL) {
+		fprintf(stderr, "Cannot create OpenGL context\n");
+		goto err_out;
 	}
 
-	glXMakeCurrent(display, window, glc);
+	glXMakeCurrent(glx_wnd->display, glx_wnd->window, glx_wnd->glc);
 
-	if (glXIsDirect(display, glc)) {
+	if (glXIsDirect(glx_wnd->display, glx_wnd->glc)) {
 		fprintf(stderr, "Direct Rendering is supported\n\r");
 	} else {
 		fprintf(stderr, "Direct Rendering is not supported\n\r");
 	}
 
 #if 0
-	XFlush(display);
-	XGrabKeyboard(display, window, True, GrabModeAsync, GrabModeAsync, CurrentTime);
-	XGrabPointer(display, window, True, ButtonPressMask,
-	    GrabModeAsync, GrabModeAsync, window, None, CurrentTime);
+	XFlush(glx_wnd->display);
+	XGrabKeyboard(glx_wnd->display, glx_wnd->window, True,
+	    GrabModeAsync, GrabModeAsync, CurrentTime);
+	XGrabPointer(glx_wnd->display, glx_wnd->window, True,
+	    ButtonPressMask, GrabModeAsync, GrabModeAsync,
+	    glx_wnd->window, None, CurrentTime);
 #endif
-	/* Set all flags in first running redraw */
-	ws.initFlag = 1;
-	ws.resizeFlag = 1;
-	ws.destroyFlag = 0;
-	redraw_callback(&ws, &mousePos);
-	glXSwapBuffers(display, window);
+	glx_wnd->redraw_cb(glx_wnd,
+	    (GLX_WND_REDRAW_F_INIT | GLX_WND_REDRAW_F_RESIZE),
+	    &glx_wnd->ws, &glx_wnd->mcur_pos, glx_wnd->udata);
+	glXSwapBuffers(glx_wnd->display, glx_wnd->window);
 
-	return 1;
+	return (0);
 
-/**************************** Errors processing ***********************/
-ERRORS:
+err_out:
 
-	if (glc) {
-		if(!glXMakeCurrent(display, None, NULL)) {
-			fprintf(stderr, "Could not release drawing context\n\r");
-		}
-		glXDestroyContext(display, glc);
-		glc = NULL;
+	glx_wnd_destroy(glx_wnd);
+
+	return (-1);
+}
+
+
+/* Updating window events, running callbacks.
+ * Returns 0 on success. */
+static inline int
+glx_wnd_update_window(glx_wnd_p glx_wnd) {
+	XEvent event;
+	Window returnedWindow;
+	uint32_t mask;
+
+	if (NULL == glx_wnd ||
+	    NULL == glx_wnd->display ||
+	    0 == glx_wnd->window ||
+	    NULL == glx_wnd->glc)
+		return (EINVAL);
+
+	/* Handle the events in the queue. */
+	if (XPending(glx_wnd->display) <= 0) {
+		/* Simple redraw GL window. */
+		/* Getting mouse cursor position. */
+		XQueryPointer(glx_wnd->display, glx_wnd->window,
+		    &returnedWindow, &returnedWindow,
+		    &glx_wnd->mcur_pos.root_x, &glx_wnd->mcur_pos.root_y,
+		    &glx_wnd->mcur_pos.win_x, &glx_wnd->mcur_pos.win_y,
+		    &mask);
+		glx_wnd->redraw_cb(glx_wnd, 0, &glx_wnd->ws,
+		    &glx_wnd->mcur_pos, glx_wnd->udata);
+		glXSwapBuffers(glx_wnd->display, glx_wnd->window);
+		return (0);
 	}
 
-	if (display != NULL && window != 0) {
-		XDestroyWindow(display, window);
-		XCloseDisplay(display);
-		display = NULL;
-		window = 0;
-	}
-
-	return -1;
-}
-
-/*
- * Get current screen resolution
- * Returns 1 on success or -1 on fail
- */
-int32_t 
-cGLXWindow::get_screen_resolution(uint32_t *puWidth, uint32_t *puHeight) {
-	Display	*display = NULL;
-	Screen	*screen = NULL;
-
-	if (puWidth == NULL || puHeight == NULL) {
-		fprintf(stderr, "Invalid input\r\n");
-		return -1;
-	}
-	display = XOpenDisplay(NULL);
-	screen = DefaultScreenOfDisplay(display);
-	if (screen == NULL)
-		return -1;
-	*puHeight = screen->height;
-	*puWidth  = screen->width;
-	XCloseDisplay(display);
-
-	return 1;
-}
-
-
-void
-cGLXWindow::hide_cursor() {
-
-	if (display == NULL || window == 0)
-		return;
-	XFixesHideCursor(display, window);
-	XFlush(display);
-}
-
-
-void
-cGLXWindow::show_cursor() {
-
-	if (display == NULL || window == 0)
-		return;
-	XFixesShowCursor(display, window);
-	XFlush(display);
-}
-
-
-/*
- *  Set window to fullscreen popup mode without borders
- *  Returns 1 on success or -1 on fail
- */
-int32_t
-cGLXWindow::set_window_fullscreen_popup() {
-
-	if (!glc)
-		return -1;
-
-	XEvent e;
-	uint32_t width, height;
-	Atom NET_WM_STATE = XInternAtom(display, "_NET_WM_STATE", 0);
-	Atom NET_WM_FULLSCREEN_MONITORS = XInternAtom(display, "_NET_WM_FULLSCREEN_MONITORS", 0);
-	Atom NET_WM_STATE_FULLSCREEN = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", 0);
-
-	if (1 > get_screen_resolution(&width, &height)) {
-		fprintf(stderr, "Could not get screen resolution\r\n");
-		return -1;
-	}
-
-	e.xany.type = ClientMessage;
-	e.xany.window = window;
-	e.xclient.message_type = NET_WM_FULLSCREEN_MONITORS;
-	e.xclient.format = 32;
-	e.xclient.data.l[0] = 0;
-	e.xclient.data.l[1] = 0;
-	e.xclient.data.l[2] = width;
-	e.xclient.data.l[3] = height;
-	e.xclient.data.l[4] = 0;
-
-	XSendEvent(display, RootWindow(display, screen), 0, SubstructureNotifyMask | SubstructureRedirectMask, &e);
-
-	e.xany.type = ClientMessage;
-	e.xany.window = window;
-	e.xclient.message_type = NET_WM_STATE;
-	e.xclient.format = 32;
-	e.xclient.data.l[0] = 1; // flag to set or unset fullscreen state
-	e.xclient.data.l[1] = NET_WM_STATE_FULLSCREEN;
-	e.xclient.data.l[2] = 0;
-	e.xclient.data.l[3] = 0;
-	e.xclient.data.l[4] = 0;
-
-	XSendEvent(display, RootWindow(display, screen), 0, SubstructureNotifyMask | SubstructureRedirectMask, &e);
-
-	XFlush(display);
-
-	return 1;
-}
-
-
-/*
- *  Unset window from fullscreen popup mode to normal state
- *  If width and height equal zero then window
- *  dimentions sets to fullscreen
- *  Returns 1 on success or -1 on fail
- */
-int32_t
-cGLXWindow::unset_window_fullscreen_popup(uint32_t width, uint32_t height) {
-
-	if (!glc)
-		return -1;
-
-	if (width == 0 && height == 0) {
-		if (1 > get_screen_resolution(&width, &height))
-		{
-			fprintf(stderr, "Could not get screen resolution\r\n");
-			return -1;
-		}
-	} else if (width == 0 || height == 0) {
-		fprintf(stderr, "Invalid screen dimentions\r\n");
-		return -1;
-	}
-
-	XEvent e;
-	Atom NET_WM_STATE = XInternAtom(display, "_NET_WM_STATE", 0);
-	Atom NET_WM_STATE_FULLSCREEN = XInternAtom(display, "_NET_WM_STATE_FULLSCREEN", 0);
-
-	e.xany.type = ClientMessage;
-	e.xany.window = window;
-	e.xclient.message_type = NET_WM_STATE;
-	e.xclient.format = 32;
-	e.xclient.data.l[0] = 0; // flag to set or unset fullscreen state
-	e.xclient.data.l[1] = NET_WM_STATE_FULLSCREEN;
-	e.xclient.data.l[2] = 0;
-	e.xclient.data.l[3] = 0;
-	e.xclient.data.l[4] = 0;
-
-	XSendEvent(display, RootWindow(display, screen), 0, SubstructureNotifyMask | SubstructureRedirectMask, &e);
-	XMoveResizeWindow(display, window, 0, 0, width, height);
-	XMapRaised(display, window);
-
-	XFlush(display);
-
-	return 1;
-}
-
-/*
- *  Resize window to width and height dimentions
- *  If width and height equal zero then window
- *  dimentions sets to fullscreen
- *  Returns 1 on success or -1 on fail
- */
-int32_t
-cGLXWindow::set_window_size(uint32_t width, uint32_t height) {
-
-	if(!glc)
-		return -1;
-
-	if (width == 0 && height == 0) {
-		if (1 > get_screen_resolution(&width, &height))
-		{
-			fprintf(stderr, "Could not get screen resolution\r\n");
-			return -1;
-		}
-	} else if (width == 0 || height == 0) {
-		fprintf(stderr, "Invalid screen dimentions\r\n");
-		return -1;
-	}
-
-	XMoveResizeWindow(display, window, 0, 0, width, height);
-	XMapRaised(display, window);
-
-	XFlush(display);
-
-	return 1;
-}
-
-
-/*
- * Returns current window XID (window)
- */
-Window
-cGLXWindow::get_window_XID() {
-	return window;
-}
-
-/*
- * Returns current window Dispalay
- */
-Display *
-cGLXWindow::get_window_display() {
-	return display;
-}
-
-/*
- * Updating window events, running callbacks
- * Returns 1 on success and -1 if window was closed or not created
- */
-int32_t
-cGLXWindow::update_window(void) {
-
-	if (!glc)
-		return -1;
-
-	/* handle the events in the queue */
-	if (XPending(display) <= 0) {
-		/* Simple redraw GL window */
-		/* Getting mouse cursor position */
-		XQueryPointer(display, window, &returnedWindow,
-		    &returnedWindow, &mousePos.iRootX, &mousePos.iRootY,
-		    &mousePos.iWinX, &mousePos.iWinY, &uMask);
-		ws.initFlag = 0;
-		ws.resizeFlag = 0;
-		ws.destroyFlag = 0;
-		redraw_callback(&ws, &mousePos);
-		glXSwapBuffers(display, window);
-		return 1;
-	}
-
-	XNextEvent(display, &event);
-
-	if (events_callback) {
-		events_callback(&event);
+	XNextEvent(glx_wnd->display, &event);
+	if (glx_wnd->events_cb) {
+		glx_wnd->events_cb(glx_wnd, &event, glx_wnd->udata);
 	}
 
 	switch (event.type) {
 	case Expose:
 		if (event.xexpose.count != 0)
 			break;
-		ws.initFlag = 0;
-		ws.resizeFlag = 0;
-		ws.destroyFlag = 0;
-		redraw_callback(&ws, &mousePos);
-		glXSwapBuffers(display, window);
+		glx_wnd->redraw_cb(glx_wnd, 0, &glx_wnd->ws,
+		    &glx_wnd->mcur_pos, glx_wnd->udata);
+		glXSwapBuffers(glx_wnd->display, glx_wnd->window);
 		break;
 	case ConfigureNotify:
-		/* Set resize flag only if window size was changed */
-		if ((event.xconfigure.width != ws.width) || 
-		    (event.xconfigure.height != ws.height)) {
-			ws.width = event.xconfigure.width;
-			ws.height = event.xconfigure.height;
-			ws.initFlag = 0;
-			ws.resizeFlag = 1;
-			ws.destroyFlag = 0;
-			redraw_callback(&ws, &mousePos);
-			glXSwapBuffers(display, window);
+		/* Set resize flag only if window size was changed. */
+		if (((uint32_t)event.xconfigure.width != glx_wnd->ws.width) || 
+		    ((uint32_t)event.xconfigure.height != glx_wnd->ws.height)) {
+			glx_wnd->ws.width = (uint32_t)event.xconfigure.width;
+			glx_wnd->ws.height = (uint32_t)event.xconfigure.height;
+			glx_wnd->redraw_cb(glx_wnd, GLX_WND_REDRAW_F_RESIZE,
+			    &glx_wnd->ws, &glx_wnd->mcur_pos, glx_wnd->udata);
+			glXSwapBuffers(glx_wnd->display, glx_wnd->window);
 		}
 		break;
 	case ClientMessage:
-		if (event.xclient.data.l[0] == wmDelete) {
-			destroy_window();
+		if ((Atom)event.xclient.data.l[0] == glx_wnd->wm_delete) {
+			glx_wnd_destroy(glx_wnd);
+			return (-1);
 		}
-		return -1;
 	case ButtonPress:
 	case ButtonRelease:
 	case KeyRelease:
 		break;
 	case KeyPress:
-		if (events_callback)
+		if (glx_wnd->events_cb)
 			break;
 		if (XLookupKeysym(&event.xkey, 0) == XK_Escape) {
-			destroy_window();
-			return -1;
+			glx_wnd_destroy(glx_wnd);
+			return (-1);
 		}
 		break;
 	}
 
-	return 1;
+	return (0);
 }
+
+
+static inline int
+glx_wnd_hide_cursor(glx_wnd_p glx_wnd) {
+
+	if (NULL == glx_wnd || NULL == glx_wnd->display || 0 == glx_wnd->window)
+		return (EINVAL);
+
+	XFixesHideCursor(glx_wnd->display, glx_wnd->window);
+	XFlush(glx_wnd->display);
+
+	return (0);
+}
+
+static inline int
+glx_wnd_show_cursor(glx_wnd_p glx_wnd) {
+
+	if (NULL == glx_wnd || NULL == glx_wnd->display || 0 == glx_wnd->window)
+		return (EINVAL);
+
+	XFixesShowCursor(glx_wnd->display, glx_wnd->window);
+	XFlush(glx_wnd->display);
+
+	return (0);
+}
+
+/* Set window to fullscreen popup mode without borders.
+ * Returns 0 on success. */
+static inline int
+glx_wnd_set_window_fullscreen_popup(glx_wnd_p glx_wnd) {
+	int error;
+	XEvent e;
+	uint32_t width, height;
+	Atom net_wm_state, net_wm_fullscreen_monitors, net_wm_state_fullscreen;
+
+	if (NULL == glx_wnd ||
+	    NULL == glx_wnd->display ||
+	    0 == glx_wnd->window ||
+	    NULL == glx_wnd->glc)
+		return (EINVAL);
+
+	error = get_screen_resolution(&width, &height);
+	if (0 != error) {
+		fprintf(stderr, "Could not get screen resolution\n");
+		return (error);
+	}
+	net_wm_state = XInternAtom(glx_wnd->display, "_NET_WM_STATE", 0);
+	net_wm_fullscreen_monitors = XInternAtom(glx_wnd->display,
+	    "_NET_WM_FULLSCREEN_MONITORS", 0);
+	net_wm_state_fullscreen = XInternAtom(glx_wnd->display,
+	    "_NET_WM_STATE_FULLSCREEN", 0);
+
+	e.xany.type = ClientMessage;
+	e.xany.window = glx_wnd->window;
+	e.xclient.message_type = net_wm_fullscreen_monitors;
+	e.xclient.format = 32;
+	e.xclient.data.l[0] = 0;
+	e.xclient.data.l[1] = 0;
+	e.xclient.data.l[2] = width;
+	e.xclient.data.l[3] = height;
+	e.xclient.data.l[4] = 0;
+	XSendEvent(glx_wnd->display,
+	    RootWindow(glx_wnd->display, glx_wnd->screen), 0,
+	    (SubstructureNotifyMask | SubstructureRedirectMask), &e);
+
+	e.xany.type = ClientMessage;
+	e.xany.window = glx_wnd->window;
+	e.xclient.message_type = net_wm_state;
+	e.xclient.format = 32;
+	e.xclient.data.l[0] = 1; /* Flag to set or unset fullscreen state. */
+	e.xclient.data.l[1] = (long)net_wm_state_fullscreen;
+	e.xclient.data.l[2] = 0;
+	e.xclient.data.l[3] = 0;
+	e.xclient.data.l[4] = 0;
+	XSendEvent(glx_wnd->display,
+	    RootWindow(glx_wnd->display, glx_wnd->screen), 0,
+	    (SubstructureNotifyMask | SubstructureRedirectMask), &e);
+
+	XFlush(glx_wnd->display);
+
+	return (0);
+}
+
+/* Unset window from fullscreen popup mode to normal state.
+ * If width and height equal zero then window dimentions sets to fullscreen.
+ * Returns 0 on success. */
+static inline int
+glx_wnd_unset_window_fullscreen_popup(glx_wnd_p glx_wnd, uint32_t width,
+    uint32_t height) {
+	int error;
+	XEvent e;
+	Atom net_wm_state, net_wm_state_fullscreen;
+
+	if (NULL == glx_wnd ||
+	    NULL == glx_wnd->display ||
+	    0 == glx_wnd->window ||
+	    NULL == glx_wnd->glc ||
+	    ((0 == width || 0 == height) && width != height))
+		return (EINVAL);
+
+	if (0 == width && 0 == height) {
+		error = get_screen_resolution(&width, &height);
+		if (0 != error)
+			return (error);
+	}
+
+	net_wm_state = XInternAtom(glx_wnd->display, "_NET_WM_STATE", 0);
+	net_wm_state_fullscreen = XInternAtom(glx_wnd->display,
+	    "_NET_WM_STATE_FULLSCREEN", 0);
+
+	e.xany.type = ClientMessage;
+	e.xany.window = glx_wnd->window;
+	e.xclient.message_type = net_wm_state;
+	e.xclient.format = 32;
+	e.xclient.data.l[0] = 0; /* Flag to set or unset fullscreen state. */
+	e.xclient.data.l[1] = (long)net_wm_state_fullscreen;
+	e.xclient.data.l[2] = 0;
+	e.xclient.data.l[3] = 0;
+	e.xclient.data.l[4] = 0;
+	XSendEvent(glx_wnd->display,
+	    RootWindow(glx_wnd->display, glx_wnd->screen), 0,
+	    (SubstructureNotifyMask | SubstructureRedirectMask), &e);
+
+	XMoveResizeWindow(glx_wnd->display, glx_wnd->window, 0, 0,
+	    width, height);
+	XMapRaised(glx_wnd->display, glx_wnd->window);
+
+	XFlush(glx_wnd->display);
+
+	return (0);
+}
+
 
 #endif /* GLXWINDOW_H */
