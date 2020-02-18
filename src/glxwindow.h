@@ -85,10 +85,8 @@ typedef struct gl_x_window_s {
 	int			screen;
 
 	XVisualInfo		*vi;
-	Colormap		cmap;
 	XSetWindowAttributes	swa;
 	GLXContext		glc;
-	XWindowAttributes	gwa;
 	Atom			wm_delete;
 
 	wnd_state_t		ws;
@@ -134,15 +132,14 @@ glx_wnd_destroy(glx_wnd_p glx_wnd) {
 		glx_wnd->redraw_cb(glx_wnd,
 		    GLX_WND_REDRAW_F_DESTROY, &glx_wnd->ws,
 		    &glx_wnd->mcur_pos, glx_wnd->udata);
-		if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
-			fprintf(stderr, "Could not release drawing context\n\r");
-		}
+		//if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
+		//	fprintf(stderr, "Could not release drawing context\n\r");
+		//}
 		glXDestroyContext(glx_wnd->display, glx_wnd->glc);
 	}
 
 	if (0 != glx_wnd->window) {
 		XDestroyWindow(glx_wnd->display, glx_wnd->window);
-		XCloseDisplay(glx_wnd->display);
 	}
 	if (0 != glx_wnd->swa.colormap) {
 		XFreeColormap(glx_wnd->display, glx_wnd->swa.colormap); 
