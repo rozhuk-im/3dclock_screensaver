@@ -25,8 +25,8 @@
       <ResourceCompiler Options=""/>
     </GlobalSettings>
     <Configuration Name="Debug" CompilerType="clang" DebuggerType="GNU gdb debugger" Type="Executable" BuildCmpWithGlobalSettings="append" BuildLnkWithGlobalSettings="append" BuildResWithGlobalSettings="append">
-      <Compiler Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" C_Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" Assembler="" Required="yes" PreCompiledHeader="" PCHInCommandLine="no" PCHFlags="" PCHFlagsPolicy="0"/>
-      <Linker Options="" Required="yes"/>
+      <Compiler Options="-Weverything;-ftrapv;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-funroll-loops;-fPIE;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded" C_Options="-Weverything;-g -DDEBUG;-O0;-D_FORTIFY_SOURCE=2;-fwrapv;-fstack-protector-all;-funroll-loops;-fPIE;-pedantic;-W;-Wall;-Wno-reserved-id-macro;-Wno-documentation-unknown-command;-Wno-documentation;-Wno-padded;-fsanitize=address;-fsanitize-recover=address" Assembler="" Required="yes" PreCompiledHeader="" PCHInCommandLine="no" PCHFlags="" PCHFlagsPolicy="0"/>
+      <Linker Options="-fsanitize=address;-fsanitize-recover=address" Required="yes"/>
       <ResourceCompiler Options="" Required="no"/>
       <General OutputFile="$(IntermediateDirectory)/$(ProjectName)" IntermediateDirectory="$(ConfigurationName)" Command="$(OutputFile)" CommandArguments="" UseSeparateDebugArgs="no" DebugArguments="" WorkingDirectory="" PauseExecWhenProcTerminates="yes" IsGUIProgram="no" IsEnabled="yes"/>
       <BuildSystem Name="Default"/>

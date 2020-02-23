@@ -132,9 +132,9 @@ glx_wnd_destroy(glx_wnd_p glx_wnd) {
 		glx_wnd->redraw_cb(glx_wnd,
 		    GLX_WND_REDRAW_F_DESTROY, &glx_wnd->ws,
 		    &glx_wnd->mcur_pos, glx_wnd->udata);
-		//if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
-		//	fprintf(stderr, "Could not release drawing context\n\r");
-		//}
+		if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
+			fprintf(stderr, "Could not release drawing context\n");
+		}
 		glXDestroyContext(glx_wnd->display, glx_wnd->glc);
 	}
 

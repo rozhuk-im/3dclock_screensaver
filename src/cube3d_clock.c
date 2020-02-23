@@ -335,7 +335,7 @@ draw_time_edge_texture(c3d_clk_p c3d_clk, const uint32_t time_val,
 
 	glViewport(0, 0, BITMAP_WIDTH, BITMAP_HEIGHT);
 	glMatrixMode(GL_PROJECTION);
-	glPushMatrix();
+	//glPushMatrix();
 	glLoadIdentity();
 	glOrtho(0, BITMAP_WIDTH, 0, BITMAP_HEIGHT, 0, 20);
 	gluLookAt(0, 0, 1, 0, 0, 0, 0, 1, 0);
@@ -343,7 +343,7 @@ draw_time_edge_texture(c3d_clk_p c3d_clk, const uint32_t time_val,
 	glDisable(GL_TEXTURE_RECTANGLE);
 
 	glMatrixMode(GL_MODELVIEW);
-	glPushMatrix();
+	//glPushMatrix();
 	glLoadIdentity();
 
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -928,7 +928,7 @@ main(int argc __unused, char **argv __unused) {
 	    events_update, &c3d_clk, &c3d_clk.glx_wnd);
 	if (0 != error)
 		return (error);
-	//glx_wnd_hide_cursor(&c3d_clk.glx_wnd);
+	glx_wnd_hide_cursor(&c3d_clk.glx_wnd);
 	glx_wnd_set_window_fullscreen_popup(&c3d_clk.glx_wnd);
 
 	while (0 == glx_wnd_update_window(&c3d_clk.glx_wnd) &&
