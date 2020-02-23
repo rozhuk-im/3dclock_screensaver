@@ -94,6 +94,9 @@ typedef struct gl_x_window_s {
 } glx_wnd_t;
 
 
+static PFNGLXCREATECONTEXTATTRIBSARBPROC glXCreateContextAttribs = NULL;
+
+
 
 static inline int
 get_screen_resolution(uint32_t *width, uint32_t *height) {
@@ -133,11 +136,13 @@ glx_wnd_destroy(glx_wnd_p glx_wnd) {
 		    GLX_WND_REDRAW_F_DESTROY, &glx_wnd->ws,
 		    &glx_wnd->mcur_pos, glx_wnd->udata);
 		if (!glXMakeCurrent(glx_wnd->display, None, NULL)) {
-			fprintf(stderr, "Could not release drawing context\n");
+			fprintf(stderr, "Could not release drawing context.\n");
 		}
 		glXDestroyContext(glx_wnd->display, glx_wnd->glc);
 	}
-
+	if (glx_wnd->vi) {
+		XFree(glx_wnd->vi);
+	}
 	if (0 != glx_wnd->window) {
 		XDestroyWindow(glx_wnd->display, glx_wnd->window);
 	}
@@ -155,19 +160,35 @@ glx_wnd_create(uint32_t width, uint32_t height, const char *caption,
     glx_wnd_redraw_cb redraw_cb, glx_wnd_events_cb events_cb, void *udata,
     glx_wnd_p glx_wnd) {
 	int error;
+	int glmaj, glmin;
+	int i, fbc_cnt, smpl_buf, smpl_cnt, bidx, bsmpl_cnt;
+	GLXFBConfig *fbc;
 	Window rootWindow = 0;
-	GLint att[] = {
+	GLint attr_legacy[] = {
 		GLX_RGBA,
-		GLX_DOUBLEBUFFER,
-		GLX_RED_SIZE, 1,
-		GLX_GREEN_SIZE, 1,
-		GLX_BLUE_SIZE, 1,
-		GLX_ALPHA_SIZE, 1,
-		GLX_DEPTH_SIZE, 1,
-		GLX_SAMPLE_BUFFERS, 1,
-		GLX_SAMPLES, 4,
+		GLX_DOUBLEBUFFER, True,
+		GLX_DEPTH_SIZE, 24,
 		None
 	};
+	GLint attr_base[] = {
+		GLX_X_RENDERABLE, True,
+		GLX_DRAWABLE_TYPE, GLX_WINDOW_BIT,
+		GLX_RENDER_TYPE, GLX_RGBA_BIT,
+		GLX_X_VISUAL_TYPE, GLX_TRUE_COLOR,
+		GLX_RED_SIZE, 8,
+		GLX_GREEN_SIZE, 8,
+		GLX_BLUE_SIZE, 8,
+		GLX_ALPHA_SIZE, 8,
+		GLX_DEPTH_SIZE, 24,
+		GLX_STENCIL_SIZE, 8,
+		None
+	};
+	GLint attr_modern[] = {
+		GLX_CONTEXT_MAJOR_VERSION_ARB, 2,
+		GLX_CONTEXT_MINOR_VERSION_ARB, 1,
+		None
+	};
+
 
 	if (((0 == width || 0 == height) && width != height) ||
 	    NULL == redraw_cb || NULL == events_cb || NULL == glx_wnd)
@@ -187,27 +208,78 @@ glx_wnd_create(uint32_t width, uint32_t height, const char *caption,
 
 	glx_wnd->display = XOpenDisplay(NULL);
 	if (NULL == glx_wnd->display) {
-		fprintf(stderr, "Cannot open display\n");
+		fprintf(stderr, "Cannot open display.\n");
 		return (-1);
 	}
 	rootWindow = DefaultRootWindow(glx_wnd->display);
 	if (0 == rootWindow) {
-		fprintf(stderr, "Cannot get root window XID\n");
+		fprintf(stderr, "Cannot get root window XID.\n");
 		goto err_out;
 	}
 	glx_wnd->screen = DefaultScreen(glx_wnd->display);
 
-	glx_wnd->vi = glXChooseVisual(glx_wnd->display, glx_wnd->screen,
-	    att);
+	/* FBConfigs were added in GLX version 1.3. */
+	if (!glXQueryVersion(glx_wnd->display, &glmaj, &glmin)) {
+		fprintf(stderr, "glXQueryVersion error.\n");
+		goto err_out;
+	}
+	if (0 == glmaj) {
+		fprintf(stderr, "Invalid GLX version.\n");
+		goto err_out;
+	}
+
+	if (1 == glmaj && 3 > glmin) {
+legacy_init:
+		glx_wnd->vi = glXChooseVisual(glx_wnd->display,
+		    glx_wnd->screen, attr_legacy);
+		glx_wnd->glc = glXCreateContext(glx_wnd->display,
+		    glx_wnd->vi, NULL, GL_TRUE);
+	} else { /* FBconfig supported by video subsystem. */
+		if (NULL == glXCreateContextAttribs) {
+			glXCreateContextAttribs =
+			    (PFNGLXCREATECONTEXTATTRIBSARBPROC)glXGetProcAddress(
+				(GLubyte*)"glXCreateContextAttribsARB");
+		}
+		if (NULL == glXCreateContextAttribs)
+			goto legacy_init;
+
+		fbc = glXChooseFBConfig(glx_wnd->display, glx_wnd->screen,
+		    attr_base, &fbc_cnt);
+		if (NULL == fbc || 0 == fbc_cnt) {
+			fprintf(stderr, "Failed to retrieve a framebuffer config.\n" );
+			goto err_out;
+		}
+		/* Looking for best visual ID from frame buffer object. */
+		for (i = 0, bidx = -1, bsmpl_cnt = 0; i < fbc_cnt; i ++) {
+			glXGetFBConfigAttrib(glx_wnd->display, fbc[i],
+			    GLX_SAMPLE_BUFFERS, &smpl_buf);
+			glXGetFBConfigAttrib(glx_wnd->display, fbc[i],
+			    GLX_SAMPLES, &smpl_cnt);
+			if (bidx < 0 ||
+			    (0 < smpl_buf && smpl_cnt > bsmpl_cnt)) {
+				bidx = i;
+				bsmpl_cnt = smpl_cnt;
+			}
+		}
+		glx_wnd->vi = glXGetVisualFromFBConfig(glx_wnd->display,
+		    fbc[bidx]);
+		glx_wnd->glc = glXCreateContextAttribs(glx_wnd->display,
+		    fbc[bidx], 0, True, attr_modern);
+		XFree(fbc);
+	}
 	if (NULL == glx_wnd->vi) {
-		fprintf(stderr, "No appropriate visual found\n");
+		fprintf(stderr, "No appropriate visual found.\n");
+		goto err_out;
+	}
+	if (NULL == glx_wnd->glc) {
+		fprintf(stderr, "Cannot create OpenGL context.\n");
 		goto err_out;
 	}
 
 	glx_wnd->swa.colormap = XCreateColormap(glx_wnd->display,
 	    rootWindow, glx_wnd->vi->visual, AllocNone);
 	if (0 == glx_wnd->swa.colormap) {
-		fprintf(stderr, "Cannot create colormap\n");
+		fprintf(stderr, "Cannot create colormap.\n");
 		goto err_out;
 	}
 	glx_wnd->swa.event_mask = (ExposureMask | KeyPressMask |
@@ -227,7 +299,7 @@ glx_wnd_create(uint32_t width, uint32_t height, const char *caption,
 	    (CWColormap | CWEventMask | CWColormap),
 	    &glx_wnd->swa);
 	if (0 == glx_wnd->window) {
-		fprintf(stderr, "Cannot create window\n");
+		fprintf(stderr, "Cannot create window.\n");
 		goto err_out;
 	}
 
@@ -248,19 +320,12 @@ glx_wnd_create(uint32_t width, uint32_t height, const char *caption,
 
 	XMapWindow(glx_wnd->display, glx_wnd->window);
 
-	glx_wnd->glc = glXCreateContext(glx_wnd->display, glx_wnd->vi,
-	    NULL, GL_TRUE);
-	if (glx_wnd->glc == NULL) {
-		fprintf(stderr, "Cannot create OpenGL context\n");
-		goto err_out;
-	}
+	XSync(glx_wnd->display, False);
 
 	glXMakeCurrent(glx_wnd->display, glx_wnd->window, glx_wnd->glc);
 
-	if (glXIsDirect(glx_wnd->display, glx_wnd->glc)) {
-		fprintf(stderr, "Direct Rendering is supported\n\r");
-	} else {
-		fprintf(stderr, "Direct Rendering is not supported\n\r");
+	if (!glXIsDirect(glx_wnd->display, glx_wnd->glc)) {
+		fprintf(stderr, "Direct Rendering is not supported.\n");
 	}
 
 #if 0
@@ -403,7 +468,7 @@ glx_wnd_set_window_fullscreen_popup(glx_wnd_p glx_wnd) {
 
 	error = get_screen_resolution(&width, &height);
 	if (0 != error) {
-		fprintf(stderr, "Could not get screen resolution\n");
+		fprintf(stderr, "Could not get screen resolution.\n");
 		return (error);
 	}
 	net_wm_state = XInternAtom(glx_wnd->display, "_NET_WM_STATE", 0);
