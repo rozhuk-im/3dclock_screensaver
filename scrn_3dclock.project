@@ -3,7 +3,7 @@
   <Description/>
   <Dependencies/>
   <VirtualDirectory Name="src">
-    <File Name="src/3dclock.c"/>
+    <File Name="src/cube3d_clock.c"/>
     <File Name="src/glxwindow.h"/>
   </VirtualDirectory>
   <Settings Type="Executable">

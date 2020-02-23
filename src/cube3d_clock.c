@@ -51,6 +51,8 @@
 #endif
 
 
+#define CUBES_COUNT		3
+
 #define FONT_HEIGHT		256
 
 #define BITMAP_WIDTH		512
@@ -59,37 +61,59 @@
 #define FLAME_WIDTH		1024
 #define FLAME_HEIGHT		1024
 
-#define IMPOSSIBLE_VAL		9999
 #define CUBE_ROTATION_SPEED	0.006f
 
 #define FONT_NAME		"./fonts/Roboto-Bold.ttf"
 
+static const float light0Diffuse[] = { 1.0f, 1.0f, 1.0f };
+static const float light0Ambient[] = { 0.3f, 0.3f, 0.3f };
+static const float light0Direction[] = { 0.0f, 0.0f, 1.0f, 0.0f };
+static const float cube_x[] = { -2.0f, 0.0f, 2.0f };
+static const float sphere_x[] = { 1.0f, 1.0f, -1.0f, -1.0f };
+static const float sphere_y[] = { 0.2f, -0.2f, 0.2f, -0.2f };
+static const float range_z = -5.5f;
+
 
 typedef struct rgb_s {
-	uint8_t r;
-	uint8_t g;
-	uint8_t b;
+	uint8_t		r;
+	uint8_t		g;
+	uint8_t		b;
 } rgb_t, *rgb_p;
 
 typedef struct digit_descriptor_s {
-	uint32_t width;
-	uint32_t height;
-	uint32_t top;
-	int32_t left;
-	GLuint texture;
+	uint32_t	width;
+	uint32_t	height;
+	int32_t		top;
+	int32_t		left;
+	GLuint		texture;
 } digit_desc_t, *digit_desc_p;
 
+typedef struct cube_s {
+	uint32_t	digit;
+	GLuint		texture;
+	float		x;
+	float		y;
+	float		d_y;
+	float		angle_x;
+	float		angle_y;
+} cube_t, *cube_p;
 
-typedef struct clock_3d_s {
+typedef struct cube_3d_clock_s {
 	volatile int	running;
 	rgb_t		flame_buf[FLAME_WIDTH][FLAME_HEIGHT];
 	digit_desc_t	digit_desc[10];
+	cube_t		cubes[CUBES_COUNT];
+	int32_t		mpos_x;
+	int32_t		mpos_y;
+	GLuint		flame_tex;
+	uint64_t	prev_time_ms;
+	GLUquadricObj	*sphere_obj;
 	glx_wnd_t	glx_wnd;
-} clock_3d_t, *clock_3d_p;
+} c3d_clk_t, *c3d_clk_p;
 
 
 
-static inline uint64_t	
+static inline uint64_t
 get_millisec(void) {
 	struct timespec ts;
 
@@ -98,12 +122,12 @@ get_millisec(void) {
 	return ((uint64_t)((ts.tv_sec * 1000) + (ts.tv_nsec / 1000000)));
 }
 
-static inline void		
-sleep_millisec(uint32_t uiMillisec) {
+static inline void
+sleep_millisec(uint32_t ms) {
 	struct timespec	ts;
 
-	ts.tv_sec = (uiMillisec / 1000);
-	ts.tv_nsec = ((uiMillisec * 1000000) - (ts.tv_sec * 1000000000));
+	ts.tv_sec = (ms / 1000);
+	ts.tv_nsec = ((ms * 1000000) - (ts.tv_sec * 1000000000));
 	nanosleep(&ts, NULL);
 }
 
@@ -113,7 +137,7 @@ randval(uint32_t max_val) {
 }
 
 static void
-flame_update(clock_3d_p clock_3d) {
+flame_update(c3d_clk_p c3d_clk) {
 	size_t i, j;
 	uint8_t tmp, color, pal_buf[FLAME_WIDTH][FLAME_HEIGHT];
 	static rgb_t palit[256];
@@ -159,7 +183,7 @@ flame_update(clock_3d_p clock_3d) {
 				tmp = 0;
 			}
 			pal_buf[i][j] = tmp;
-			clock_3d->flame_buf[i][j] = palit[tmp];
+			c3d_clk->flame_buf[i][j] = palit[tmp];
 		}
 	}
 #else
@@ -188,19 +212,19 @@ flame_update(clock_3d_p clock_3d) {
 				tmp = 0;
 			}
 			pal_buf[i][j] = tmp;
-			clock_3d->flame_buf[i][j] = palit[tmp];
+			c3d_clk->flame_buf[i][j] = palit[tmp];
 		}
 	}
 #endif
 	//for (i = 0; i < (FLAME_WIDTH * FLAME_HEIGHT); i ++) {
-	//	clock_3d->flame_buf[0][i] = palit[pal_buf[0][i]];
+	//	c3d_clk->flame_buf[0][i] = palit[pal_buf[0][i]];
 	//}
 }
 
 
 /* Generates digits textures from tt fonts. */
 static int	
-create_digits_tex_array(clock_3d_p clock_3d) {
+create_digits_tex_array(c3d_clk_p c3d_clk) {
 	int error = -1;
 	FT_Library lib = NULL;
 	FT_Face font = NULL;
@@ -208,7 +232,7 @@ create_digits_tex_array(clock_3d_p clock_3d) {
 	uint8_t *bitmap = NULL;
 	size_t i, x, y, bm_size;
 
-	memset(&clock_3d->digit_desc, 0x00, sizeof(clock_3d->digit_desc));
+	memset(&c3d_clk->digit_desc, 0x00, sizeof(c3d_clk->digit_desc));
 
 	if (0 != FT_Init_FreeType(&lib))
 		return (-1);
@@ -221,18 +245,18 @@ create_digits_tex_array(clock_3d_p clock_3d) {
 		goto err_out;
 
 	gliph = font->glyph;
-	for (i = 0; i < nitems(clock_3d->digit_desc); i ++) {
-		if (0 != FT_Load_Char(font, (i + '0'), FT_LOAD_RENDER))
+	for (i = 0; i < nitems(c3d_clk->digit_desc); i ++) {
+		if (0 != FT_Load_Char(font, ('0' + i), FT_LOAD_RENDER))
 			goto err_out;
 
-		clock_3d->digit_desc[i].width = gliph->bitmap.width;
-		clock_3d->digit_desc[i].height = gliph->bitmap.rows;
-		clock_3d->digit_desc[i].top = (uint32_t)gliph->bitmap_top;
-		clock_3d->digit_desc[i].left = gliph->bitmap_left;
+		c3d_clk->digit_desc[i].width = gliph->bitmap.width;
+		c3d_clk->digit_desc[i].height = gliph->bitmap.rows;
+		c3d_clk->digit_desc[i].top = gliph->bitmap_top;
+		c3d_clk->digit_desc[i].left = gliph->bitmap_left;
 
 		/* Two bytes for each pixel. */
-		bm_size = (2 * clock_3d->digit_desc[i].width *
-		    clock_3d->digit_desc[i].height);	
+		bm_size = (2 * c3d_clk->digit_desc[i].width *
+		    c3d_clk->digit_desc[i].height);
 		bitmap = (uint8_t*)malloc(bm_size);
 		if (NULL == bitmap) {
 			error = ENOMEM;
@@ -241,25 +265,25 @@ create_digits_tex_array(clock_3d_p clock_3d) {
 		memset(bitmap, 0xff, bm_size);
 
 		/* Filling bitmap grey&alpha bytes. */
-		for (y = 0; y < clock_3d->digit_desc[i].height; y ++) {
-			for (x = 0; x < clock_3d->digit_desc[i].width; x ++) {
+		for (y = 0; y < c3d_clk->digit_desc[i].height; y ++) {
+			for (x = 0; x < c3d_clk->digit_desc[i].width; x ++) {
 				bitmap[2 * (x + y * gliph->bitmap.width) + 1] =
 				    (uint8_t)(0.97f * gliph->bitmap.buffer[x + y * gliph->bitmap.width]);
 			}
 		}
 
 		/* Creating symbol texture. */
-		glGenTextures(1, &clock_3d->digit_desc[i].texture);
-		if (0 == clock_3d->digit_desc[i].texture)
+		glGenTextures(1, &c3d_clk->digit_desc[i].texture);
+		if (0 == c3d_clk->digit_desc[i].texture)
 			goto err_out;
 		glEnable(GL_TEXTURE_RECTANGLE);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-		glBindTexture(GL_TEXTURE_RECTANGLE, clock_3d->digit_desc[i].texture);
+		glBindTexture(GL_TEXTURE_RECTANGLE, c3d_clk->digit_desc[i].texture);
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 		glTexImage2D(GL_TEXTURE_RECTANGLE, 0, GL_RGBA, 
-		    (GLsizei)clock_3d->digit_desc[i].width,
-		    (GLsizei)clock_3d->digit_desc[i].height, 0,
+		    (GLsizei)c3d_clk->digit_desc[i].width,
+		    (GLsizei)c3d_clk->digit_desc[i].height, 0,
 		    GL_LUMINANCE_ALPHA,	GL_UNSIGNED_BYTE, bitmap);
 
 		free(bitmap);
@@ -269,8 +293,8 @@ create_digits_tex_array(clock_3d_p clock_3d) {
 
 err_out:
 	if (0 != error) {
-		for (i = 0; i < nitems(clock_3d->digit_desc); i ++) {
-			glDeleteTextures(1, &clock_3d->digit_desc[i].texture);
+		for (i = 0; i < nitems(c3d_clk->digit_desc); i ++) {
+			glDeleteTextures(1, &c3d_clk->digit_desc[i].texture);
 		}
 	}
 	free(bitmap);
@@ -281,86 +305,33 @@ err_out:
 }
 
 static void
-destroy_digits_tex_array(clock_3d_p clock_3d)
+destroy_digits_tex_array(c3d_clk_p c3d_clk)
 {
-	for (size_t i = 0; i < nitems(clock_3d->digit_desc); i ++) {
-		glDeleteTextures(1, &clock_3d->digit_desc[i].texture);
+	for (size_t i = 0; i < nitems(c3d_clk->digit_desc); i ++) {
+		glDeleteTextures(1, &c3d_clk->digit_desc[i].texture);
 	}
-	memset(&clock_3d->digit_desc, 0x00, sizeof(clock_3d->digit_desc));
+	memset(&c3d_clk->digit_desc, 0x00, sizeof(c3d_clk->digit_desc));
 }
 
 
-/* Draw didx textured quads. */
+/* Draw textured quads. */
 static void
-draw_gliph_quads(clock_3d_p clock_3d, const int time_val) {
-	size_t i, didx;
-	uint32_t x, y;
-	uint8_t time_digits[2];
-
-	if (0 > time_val || 99 < time_val)
-		return;
-	time_digits[0] = (uint8_t)(time_val / 10);
-	time_digits[1] = (uint8_t)(time_val % 10);
-
-	x = (uint32_t)((BITMAP_WIDTH - ((2 * clock_3d->digit_desc[0].width) +
-	    (uint32_t)clock_3d->digit_desc[0].left)) * 0.45f);
-	y = ((BITMAP_HEIGHT - FONT_HEIGHT) / 2);
-
-	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-	glDisable(GL_LIGHTING);
-	glEnable(GL_TEXTURE_RECTANGLE);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
-	glEnable(GL_COLOR_MATERIAL);
-	glDisable(GL_DEPTH_TEST);
-	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-	glNormal3f(0.0f, 0.0f, 1.0f);
-
-	for (i = 0; i < 2; i ++) {
-		didx = time_digits[i];
-		glBindTexture(GL_TEXTURE_RECTANGLE,
-		    clock_3d->digit_desc[didx].texture);
-
-		x += (uint32_t)(clock_3d->digit_desc[didx].left + 1);
-		y -= (clock_3d->digit_desc[didx].height - clock_3d->digit_desc[didx].top);
-
-		glBegin(GL_QUADS);
-		{
-			glTexCoord2f((clock_3d->digit_desc[didx].width - 1),
-			    0.0f);
-			glVertex3f((x + clock_3d->digit_desc[didx].width),
-			    (y + clock_3d->digit_desc[didx].height), 0.5f);
-
-			glTexCoord2f(0.0f, 0.0f);
-			glVertex3f(x,
-			    (y + clock_3d->digit_desc[didx].height),
-			    0.5f);
-
-			glTexCoord2f(0.0f,
-			    (clock_3d->digit_desc[didx].height - 1));
-			glVertex3f(x, y, 0.5f);
-
-			glTexCoord2f((clock_3d->digit_desc[didx].width - 1),
-			    (clock_3d->digit_desc[didx].height - 1));
-			glVertex3f((x + clock_3d->digit_desc[didx].width),
-			    y, 0.5f);
-		}
-		glEnd();
-
-		x += clock_3d->digit_desc[didx].width;
-	}
-}
-
-
-static void
-draw_time_edge_texture(clock_3d_p clock_3d, const int time_val,
+draw_time_edge_texture(c3d_clk_p c3d_clk, const uint32_t time_val,
     const GLuint tex_id) {
+	size_t i;
+	uint32_t x;
+	uint8_t time_digits[2];
+	digit_desc_p digit;
+	const uint32_t y = ((BITMAP_HEIGHT - FONT_HEIGHT) / 2);
 	const float border_width = 20.0f;
 	const float line_width = 3.0f;
 	const float cathet = 90.0f;
 	const float line_const = 0.8f;
+
+	if (99 < time_val)
+		return;
+	time_digits[0] = (uint8_t)(time_val / 10);
+	time_digits[1] = (uint8_t)(time_val % 10);
 
 	glViewport(0, 0, BITMAP_WIDTH, BITMAP_HEIGHT);
 	glMatrixMode(GL_PROJECTION);
@@ -500,7 +471,44 @@ draw_time_edge_texture(clock_3d_p clock_3d, const int time_val,
 
 	glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
 
-	draw_gliph_quads(clock_3d, time_val);
+	/* Draw gliph quads. */
+	glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+	glDisable(GL_LIGHTING);
+	glEnable(GL_TEXTURE_RECTANGLE);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+	glEnable(GL_COLOR_MATERIAL);
+	glDisable(GL_DEPTH_TEST);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+	glNormal3f(0.0f, 0.0f, 1.0f);
+
+	digit = &c3d_clk->digit_desc[time_digits[0]];
+	x = ((BITMAP_WIDTH / 2) - (digit->width + (uint32_t)digit->left));
+	for (i = 0; i < 2; i ++) {
+		digit = &c3d_clk->digit_desc[time_digits[i]];
+		glBindTexture(GL_TEXTURE_RECTANGLE, digit->texture);
+
+		glBegin(GL_QUADS);
+		{
+			glTexCoord2f(digit->width, 0.0f);
+			glVertex3f((x + digit->width),
+			    (y + digit->height), 0.5f);
+
+			glTexCoord2f(0.0f, 0.0f);
+			glVertex3f(x, (y + digit->height), 0.5f);
+
+			glTexCoord2f(0.0f, digit->height);
+			glVertex3f(x, y, 0.5f);
+
+			glTexCoord2f(digit->width, digit->height);
+			glVertex3f((x + digit->width), y, 0.5f);
+		}
+		glEnd();
+
+		x += (digit->width + (uint32_t)digit->left);
+	}
 
 	glEnable(GL_TEXTURE_RECTANGLE);
 	glBindTexture(GL_TEXTURE_RECTANGLE, tex_id);
@@ -508,35 +516,71 @@ draw_time_edge_texture(clock_3d_p clock_3d, const int time_val,
 }
 
 
+
+static int
+cube_init(cube_p cube, const float x, const float y, const float d_y) {
+
+	if (NULL == cube)
+		return (EINVAL);
+
+	memset(cube, 0x00, sizeof(cube_t));
+	cube->digit = (~((uint32_t)0));
+	glGenTextures(1, &cube->texture);
+	cube->x = x;
+	cube->y = y;
+	cube->d_y = d_y;
+	/* Getting start random rotation angles for cubes. */
+	cube->angle_x = randval(360);
+	cube->angle_y = randval(60);
+
+	return (0);
+}
+
+static void
+cube_destroy(cube_p cube) {
+
+	if (NULL == cube)
+		return;
+	glDeleteTextures(1, &cube->texture);
+	memset(cube, 0x00, sizeof(cube_t));
+}
+
+static int
+cube_update(c3d_clk_p c3d_clk, cube_p cube, const uint32_t time_val,
+    const float rotation_delta) {
+
+	if (NULL == cube)
+		return (EINVAL);
+
+	if (time_val != cube->digit) {
+		cube->digit = time_val;
+		draw_time_edge_texture(c3d_clk, time_val, cube->texture);
+	}
+
+	cube->angle_x += rotation_delta;
+	if (cube->angle_x > 360.0f) {
+		cube->angle_x = 0.0f;
+	}
+	cube->angle_y += cube->d_y;
+	if (cube->angle_y > 60.0f || cube->angle_y < -60.0f) {
+		cube->d_y = -cube->d_y;
+	}
+
+	return (0);
+}
+
 /* Redraw window callback. */
 static void
 redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
     const wnd_state_p ws, const mcur_pos_p mcur_pos, void *udata) {
-	clock_3d_p clock_3d = udata;
+	c3d_clk_p c3d_clk = udata;
 	size_t i;
 	time_t rawtime;
 	struct tm tminfo;
-	float fDelta;
-
-	const float light0Diffuse[] = { 1.0f, 1.0f, 1.0f };
-	const float light0Ambient[] = { 0.3f, 0.3f, 0.3f };
-	const float light0Direction[] = { 0.0f, 0.0f, 1.0f, 0.0f };
-	const float cube_x[] = { 2.0f, 0.0f, -2.0f };
-	const float sphere_x[] = { 1.0f, 1.0f, -1.0f, -1.0f };
-	const float sphere_y[] = { 0.2f, -0.2f, 0.2f, -0.2f };
-	const float range_z = -5.5f;
-	const float fX = ((float)ws->width / (float)ws->height);
+	float rotation_delta;
+	uint32_t time_val[CUBES_COUNT];
+	const float aspect = ((float)ws->width / (float)ws->height);
 	const uint64_t cur_time_ms = get_millisec();
-
-	static float dY[] = { 0.2f, 0.2f, 0.2f };
-	static int uSec = -1, uMin = -1, uHour = -1;
-	static int32_t iStartMousePosX = IMPOSSIBLE_VAL;
-	static int32_t iStartMousePosY = IMPOSSIBLE_VAL;
-	static GLuint cube_tex[3], flame_tex;
-	static float cube_angle_x[3];
-	static float cube_angle_y[3];
-	static uint64_t prev_time_ms = 0;
-	static GLUquadricObj *sphere_obj = NULL;
 
 	/************************ GL initializing *********************/
 	if (0 != (GLX_WND_REDRAW_F_INIT & flags)) {
@@ -550,25 +594,24 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 		glEnable(GL_TEXTURE_RECTANGLE);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
+		c3d_clk->mpos_x = INT32_MAX;
+		c3d_clk->mpos_y = INT32_MAX;
 		/* Init sphere objects. */
-		sphere_obj = gluNewQuadric();
-		gluQuadricDrawStyle(sphere_obj, GLU_FILL);
-		gluQuadricNormals(sphere_obj, GLU_SMOOTH);
+		c3d_clk->sphere_obj = gluNewQuadric();
+		gluQuadricDrawStyle(c3d_clk->sphere_obj, GLU_FILL);
+		gluQuadricNormals(c3d_clk->sphere_obj, GLU_SMOOTH);
 
 		/* Generating textures. */
-		create_digits_tex_array(clock_3d);
+		create_digits_tex_array(c3d_clk);
 
 		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-		glGenTextures(1, &flame_tex);
-		for (i = 0; i < nitems(cube_tex); i ++) {
-			glGenTextures(1, &cube_tex[i]);
-			/* Getting start random rotation angles for cubes. */
-			cube_angle_y[i] = randval(60);
-			cube_angle_x[i] = randval(360);
+		glGenTextures(1, &c3d_clk->flame_tex);
+		for (i = 0; i < CUBES_COUNT; i ++) {
+			cube_init(&c3d_clk->cubes[i], cube_x[i], 0.0f, 0.2f);
 		}
 
 		glFlush();
@@ -576,20 +619,24 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 
 	/************************** Closing window ********************/
 	if (0 != (GLX_WND_REDRAW_F_DESTROY & flags)) {
-		destroy_digits_tex_array(clock_3d);
+		for (i = 0; i < CUBES_COUNT; i ++) {
+			cube_destroy(&c3d_clk->cubes[i]);
+		}
+		glDeleteTextures(1, &c3d_clk->flame_tex);
+		destroy_digits_tex_array(c3d_clk);
 		return;
 	}
 
 	/* Checking mouse cursor position and stop program if it changes. */
 	if (mcur_pos->root_x > 0 &&
 	    mcur_pos->root_y > 0 &&
-	    iStartMousePosX == IMPOSSIBLE_VAL &&
-	    iStartMousePosY == IMPOSSIBLE_VAL) {
-		iStartMousePosX = mcur_pos->root_x;
-		iStartMousePosY = mcur_pos->root_y;
-	} else if ((iStartMousePosX != IMPOSSIBLE_VAL || iStartMousePosY != IMPOSSIBLE_VAL) &&
-	    ((iStartMousePosX != mcur_pos->root_x) || (iStartMousePosY != mcur_pos->root_y))) {
-		//clock_3d->running = 0;
+	    c3d_clk->mpos_x == INT32_MAX &&
+	    c3d_clk->mpos_y == INT32_MAX) {
+		c3d_clk->mpos_x = mcur_pos->root_x;
+		c3d_clk->mpos_y = mcur_pos->root_y;
+	} else if ((c3d_clk->mpos_x != INT32_MAX || c3d_clk->mpos_y != INT32_MAX) &&
+	    ((c3d_clk->mpos_x != mcur_pos->root_x) || (c3d_clk->mpos_y != mcur_pos->root_y))) {
+		//c3d_clk->running = 0;
 	}
 
 	/************************* Render to texture ******************/
@@ -599,44 +646,28 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 	glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
 	glEnable(GL_COLOR_MATERIAL);
 
+	/* Flame updating. */
+	flame_update(c3d_clk);
+
+	/*********************** Render to screen *********************/
 	/* Create framing digits on edges textures. */
 	time(&rawtime);
 	localtime_r(&rawtime, &tminfo);
-	if (uSec != tminfo.tm_sec) {
-		uSec = tminfo.tm_sec; 
-		draw_time_edge_texture(clock_3d, tminfo.tm_sec, cube_tex[0]);
-		if (uMin != tminfo.tm_min) {
-			uMin = tminfo.tm_min; 
-			draw_time_edge_texture(clock_3d, tminfo.tm_min, cube_tex[1]);
-			if (uHour != tminfo.tm_hour) {
-				uHour = tminfo.tm_hour; 
-				draw_time_edge_texture(clock_3d, tminfo.tm_hour, cube_tex[2]);
-			}
-		}
-	}
-
-	/* Flame updating. */
-	flame_update(clock_3d);
-
-	/*********************** Render to screen *********************/
+	time_val[0] = (uint32_t)tminfo.tm_hour;
+	time_val[1] = (uint32_t)tminfo.tm_min;
+	time_val[2] = (uint32_t)tminfo.tm_sec;
 	/* Rotations calculation. */
-	fDelta = CUBE_ROTATION_SPEED * (float)(cur_time_ms - prev_time_ms);
-	prev_time_ms = cur_time_ms;
+	rotation_delta = CUBE_ROTATION_SPEED * (float)(cur_time_ms - c3d_clk->prev_time_ms);
+	c3d_clk->prev_time_ms = cur_time_ms;
 	
-	for (i = 0; i < nitems(cube_angle_x); i ++) {
-		cube_angle_x[i] += fDelta;
-		if (cube_angle_x[i] > 360.0f) {
-			cube_angle_x[i] = 0.0f;
-		}
-		cube_angle_y[i] += dY[i];
-		if (cube_angle_y[i] > 60.0f || cube_angle_y[i] < -60.0f) {
-			dY[i] = -dY[i];
-		}
+	for (i = 0; i < CUBES_COUNT; i ++) {
+		cube_update(c3d_clk, &c3d_clk->cubes[i], time_val[i],
+		    rotation_delta);
 	}
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadIdentity();
-	gluPerspective(50.0, (double)fX, 0.5, 500.0);
+	gluPerspective(50.0, (double)aspect, 0.5, 500.0);
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
@@ -660,9 +691,9 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 
 
 	/* Drawing flame quad */
-	glBindTexture(GL_TEXTURE_RECTANGLE, flame_tex);
+	glBindTexture(GL_TEXTURE_RECTANGLE, c3d_clk->flame_tex);
 	glTexImage2D(GL_TEXTURE_RECTANGLE, 0, 3, FLAME_WIDTH, FLAME_HEIGHT,
-	    0, GL_RGB, GL_UNSIGNED_BYTE, clock_3d->flame_buf);
+	    0, GL_RGB, GL_UNSIGNED_BYTE, c3d_clk->flame_buf);
 	glDisable(GL_LIGHTING);
 	
 	glColor4f(1.0f, 1.0f, 1.0f, 0.9f);
@@ -673,13 +704,13 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 		{
 			glNormal3f(0.0f, 0.0f, 1.0f);
 			glTexCoord2f(0.0f, 0.0f);
-			glVertex3f((-5.0f * fX), -5.2f, 0.0f);
+			glVertex3f((-5.0f * aspect), -5.2f, 0.0f);
 			glTexCoord2f(((FLAME_WIDTH / 2) - 1), 0.0f);
-			glVertex3f((-5.0f * fX), 4.0f, 0.0f);
+			glVertex3f((-5.0f * aspect), 4.0f, 0.0f);
 			glTexCoord2f(((FLAME_WIDTH / 2) - 1), (FLAME_HEIGHT - 1));
-			glVertex3f((5.0f * fX), 4.0f, 0.0f);
+			glVertex3f((5.0f * aspect), 4.0f, 0.0f);
 			glTexCoord2f(0.0f, (FLAME_HEIGHT - 1));
-			glVertex3f((5.0f * fX), -5.2f, 0.0f);
+			glVertex3f((5.0f * aspect), -5.2f, 0.0f);
 		}
 		glEnd();
 	}
@@ -696,13 +727,14 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 
 	/* Drawing time cubes. */
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
-	for (i = 0; i < nitems(cube_x); i ++) {
+	for (i = 0; i < CUBES_COUNT; i ++) {
 		glPushMatrix();
 		{
-			glTranslatef(cube_x[i], 0.0f, range_z);
-			glRotatef(cube_angle_y[i], 1.0f, 0.0f, 0.0f);
-			glRotatef(cube_angle_x[i], 0.0f, 1.0f, 0.0f);
-			glBindTexture(GL_TEXTURE_RECTANGLE, cube_tex[i]);
+			glTranslatef(c3d_clk->cubes[i].x,
+			    c3d_clk->cubes[i].y, range_z);
+			glRotatef(c3d_clk->cubes[i].angle_y, 1.0f, 0.0f, 0.0f);
+			glRotatef(c3d_clk->cubes[i].angle_x, 0.0f, 1.0f, 0.0f);
+			glBindTexture(GL_TEXTURE_RECTANGLE, c3d_clk->cubes[i].texture);
 			glBegin(GL_QUADS);
 			{
 				glNormal3f(0.0f, 0.0f, 0.2f);
@@ -775,14 +807,15 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 	/* Getting path of full flame texture. */
 	glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_S, GL_CLAMP);
 	glTexParameterf(GL_TEXTURE_RECTANGLE, GL_TEXTURE_WRAP_T, GL_CLAMP);
-	glBindTexture(GL_TEXTURE_RECTANGLE, flame_tex);
+	glBindTexture(GL_TEXTURE_RECTANGLE, c3d_clk->flame_tex);
 	glColor4f(0.3f, 0.0f, 0.0f, 0.5f);
-	for (i = 0; i < nitems(cube_x); i ++) {
+	for (i = 0; i < CUBES_COUNT; i ++) {
 		glPushMatrix();
 		{
-			glTranslatef(cube_x[i], 0.0f, range_z);
-			glRotatef(cube_angle_y[i], 1.0f, 0.0f, 0.0f);
-			glRotatef(cube_angle_x[i], 0.0f, 1.0f, 0.0f);
+			glTranslatef(c3d_clk->cubes[i].x,
+			    c3d_clk->cubes[i].y, range_z);
+			glRotatef(c3d_clk->cubes[i].angle_y, 1.0f, 0.0f, 0.0f);
+			glRotatef(c3d_clk->cubes[i].angle_x, 0.0f, 1.0f, 0.0f);
 			glBegin(GL_QUADS);
 			{
 				glNormal3f(0.0f, 0.0f, 1.0f);
@@ -861,7 +894,7 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 		{
 			glNormal3f(0.0f, 0.0f, 1.0f);
 			glTranslatef(sphere_x[i], sphere_y[i], range_z);
-			gluSphere(sphere_obj, 0.1, 16, 16);
+			gluSphere(c3d_clk->sphere_obj, 0.1, 16, 16);
 		}
 		glPopMatrix();
 	}
@@ -872,12 +905,12 @@ redraw_window(glx_wnd_p glx_wnd __unused, const uint32_t flags,
 static void
 events_update(glx_wnd_p glx_wnd __unused, const XEvent *event,
     void *udata) {
-	clock_3d_p clock_3d = udata;
+	c3d_clk_p c3d_clk = udata;
 
 	switch (event->type) {
 	case ButtonPress:
 	case KeyPress:
-		clock_3d->running = 0;
+		c3d_clk->running = 0;
 		break;
 	}
 }
@@ -886,25 +919,25 @@ events_update(glx_wnd_p glx_wnd __unused, const XEvent *event,
 int
 main(int argc __unused, char **argv __unused) {
 	int error;
-	clock_3d_t clock_3d;
+	c3d_clk_t c3d_clk;
 
-	memset(&clock_3d, 0x00, sizeof(clock_3d));
-	clock_3d.running ++;
+	memset(&c3d_clk, 0x00, sizeof(c3d_clk));
+	c3d_clk.running ++;
 
-	error = glx_wnd_create(0, 0, "3dclock", redraw_window,
-	    events_update, &clock_3d, &clock_3d.glx_wnd);
+	error = glx_wnd_create(0, 0, "cube3d clock", redraw_window,
+	    events_update, &c3d_clk, &c3d_clk.glx_wnd);
 	if (0 != error)
 		return (error);
-	//glx_wnd_hide_cursor(&clock_3d.glx_wnd);
-	glx_wnd_set_window_fullscreen_popup(&clock_3d.glx_wnd);
+	//glx_wnd_hide_cursor(&c3d_clk.glx_wnd);
+	glx_wnd_set_window_fullscreen_popup(&c3d_clk.glx_wnd);
 
-	while (0 == glx_wnd_update_window(&clock_3d.glx_wnd) &&
-	    0 != clock_3d.running) {
+	while (0 == glx_wnd_update_window(&c3d_clk.glx_wnd) &&
+	    0 != c3d_clk.running) {
 		sleep_millisec(1);
 	}
 
-	glx_wnd_show_cursor(&clock_3d.glx_wnd);
-	glx_wnd_destroy(&clock_3d.glx_wnd);
+	glx_wnd_show_cursor(&c3d_clk.glx_wnd);
+	glx_wnd_destroy(&c3d_clk.glx_wnd);
 
 	return (0);
 }

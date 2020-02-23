@@ -97,8 +97,8 @@ typedef struct gl_x_window_s {
 
 static inline int
 get_screen_resolution(uint32_t *width, uint32_t *height) {
-	Display	*display = NULL;
-	Screen	*screen = NULL;
+	Display *display = NULL;
+	Screen *screen = NULL;
 
 	if (width == NULL && height == NULL)
 		return (EINVAL);
